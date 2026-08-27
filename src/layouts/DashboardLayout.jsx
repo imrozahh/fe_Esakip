@@ -6,17 +6,13 @@ function DashboardLayout() {
   return (
     <div className="min-h-screen bg-slate-50">
 
-      {/* Sidebar */}
       <Sidebar />
 
-      {/* Area kanan */}
-      <div className="ml-[260px] min-h-screen">
+      <div className="ml-[260px] min-h-screen w-[calc(100%-260px)]">
 
-        {/* Navbar */}
         <Navbar />
 
-        {/* Isi halaman */}
-        <main>
+        <main className="w-full overflow-x-auto">
           <Outlet />
         </main>
 
