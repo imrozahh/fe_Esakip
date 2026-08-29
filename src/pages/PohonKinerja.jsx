@@ -118,6 +118,9 @@ function EditablePohonKinerja() {
   const [showUpload, setShowUpload] = useState(false);
   const [saved, setSaved] = useState(false);
 
+  // Menyimpan node yang dihapus sampai tombol Simpan Perubahan ditekan
+  const [deletedNodes, setDeletedNodes] = useState([]);
+
   // Filter states
   const [tahun, setTahun] = useState("2026");
   const [unitKerja, setUnitKerja] = useState("");
@@ -243,36 +246,123 @@ function EditablePohonKinerja() {
 
   const deleteNode = () => {
     if (selected.level === "ULTIMATE") return;
-    setTree((current) => ({ ...current, branches: current.branches.map((branch) => ({ ...branch, children: branch.children.filter((child) => child.id !== selected.id) })) }));
-    setSelected({ ...tree, id: "ultimate", level: "ULTIMATE" });
+
+    const deletedNode = {
+      id: selected.id,
+      level: selected.level,
+    };
+
+    // Tandai node untuk dihapus dari database saat tombol Simpan Perubahan ditekan.
+    setDeletedNodes((current) => {
+      if (current.some((item) => item.id === deletedNode.id)) {
+        return current;
+      }
+      return [...current, deletedNode];
+    });
+
+    // Hapus node dari tampilan tanpa mengubah struktur/tampilan bagan lainnya.
+    setTree((current) => ({
+      ...current,
+      branches: current.branches
+        .filter((branch) => branch.id !== selected.id)
+        .map((branch) => ({
+          ...branch,
+          children: (branch.children || [])
+            .filter((child) => child.id !== selected.id)
+            .map((child) => ({
+              ...child,
+              children: (child.children || []).filter(
+                (output) => output.id !== selected.id
+              ),
+            })),
+        })),
+    }));
+
+    // Kembali ke Ultimate setelah node dihapus dari tampilan.
+    setSelected({
+      ...tree,
+      id: tree.id || "ultimate",
+      level: "ULTIMATE",
+    });
+
     setSaved(false);
+    setErrorData("");
   };
 
   const saveChanges = async () => {
-    if (!pohonKinerjaData || !selected.id || selected.id.startsWith("node-")) {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(tree));
-      setSaved(true);
-      return;
-    }
-
-    const [level, id] = selected.id.split("-");
-
     try {
-      const response = await fetch(`http://localhost:8000/api/pohon-kinerja/node/${level}/${id}`, {
-        method: "PUT",
-        headers: {
-          Accept: "application/json",
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          title: selected.title || "",
-          indicator: selected.indicator || "",
-        }),
-      });
+      // 1. Proses semua node yang sebelumnya dihapus.
+      for (const deletedNode of deletedNodes) {
+        const [deleteLevel, deleteIdString] = deletedNode.id.split("-");
+        const deleteId = Number(deleteIdString);
+
+        if (!deleteLevel || !Number.isInteger(deleteId)) {
+          throw new Error(`ID node yang dihapus tidak valid: ${deletedNode.id}`);
+        }
+
+        const deleteResponse = await fetch(
+          `http://localhost:8000/api/pohon-kinerja/node/${deleteLevel}/${deleteId}`,
+          {
+            method: "DELETE",
+            headers: {
+              Accept: "application/json",
+            },
+          }
+        );
+
+        const deleteData = await deleteResponse.json();
+
+        if (!deleteResponse.ok) {
+          throw new Error(
+            deleteData.message || `Gagal menghapus ${deletedNode.level}`
+          );
+        }
+      }
+
+      // Setelah semua penghapusan berhasil, kosongkan antrean hapus.
+      setDeletedNodes([]);
+
+      // Jika tidak ada node yang sedang dipilih untuk di-update,
+      // cukup simpan state lokal setelah proses delete selesai.
+      if (
+        !pohonKinerjaData ||
+        !selected.id ||
+        selected.id.startsWith("node-")
+      ) {
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(tree));
+        setSaved(true);
+        setErrorData("");
+        return;
+      }
+
+      const [level, idString] = selected.id.split("-");
+      const id = Number(idString);
+
+      if (!Number.isInteger(id)) {
+        throw new Error("ID node tidak valid.");
+      }
+
+      const response = await fetch(
+        `http://localhost:8000/api/pohon-kinerja/node/${level}/${id}`,
+        {
+          method: "PUT",
+          headers: {
+            Accept: "application/json",
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            title: selected.title || "",
+            indicator: selected.indicator || "",
+          }),
+        }
+      );
 
       const data = await response.json();
+
       if (!response.ok) {
-        throw new Error(data.message || "Gagal menyimpan perubahan");
+        throw new Error(
+          data.message || "Gagal menyimpan perubahan"
+        );
       }
 
       localStorage.setItem(STORAGE_KEY, JSON.stringify(tree));
