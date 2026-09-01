@@ -1,6 +1,20 @@
 import { useEffect, useMemo, useState } from "react";
-import * as XLSX from "xlsx";
-import { Download, Plus, Pencil, Trash2 } from "lucide-react";
+import * as XLSX from "xlsx-js-style";
+import { Download, Pencil } from "lucide-react";
+
+/* =========================================================
+   KONFIGURASI API
+========================================================= */
+
+const API_BASE_URL = "http://127.0.0.1:8000/api";
+
+// Slug URL yang dipakai backend Laravel: /api/renstra/nodes/{slug}/{id}
+const LEVEL_TO_SLUG = {
+  "ULTIMATE OUTCOME": "ultimate",
+  "INTERMEDIATE OUTCOME": "intermediate",
+  "IMMEDIATE OUTCOME": "immediate",
+  OUTPUT: "output",
+};
 
 /* =========================================================
    UTILITIES
@@ -12,17 +26,12 @@ function createId(prefix) {
 
 /* =========================================================
    HITUNG JUMLAH BARIS
+   (1 baris tabel = 1 Output. Sub Kegiatan sudah nempel jadi
+   bagian dari Output, jadi tidak menambah baris lagi.)
 ========================================================= */
 
-function countOutputRows(output) {
-  return Math.max(output.subKegiatan?.length || 0, 1);
-}
-
 function countImmediateRows(immediate) {
-  return Math.max(
-    immediate.outputs.reduce((total, output) => total + countOutputRows(output), 0),
-    1
-  );
+  return Math.max(immediate.outputs?.length || 0, 1);
 }
 
 function countIntermediateRows(intermediate) {
@@ -35,9 +44,9 @@ function countIntermediateRows(intermediate) {
   );
 }
 
-function countUltimateRows(ultimate) {
+function countUltimateRows(renstra) {
   return Math.max(
-    ultimate.intermediates.reduce(
+    renstra.intermediates.reduce(
       (total, intermediate) => total + countIntermediateRows(intermediate),
       0
     ),
@@ -46,9 +55,7 @@ function countUltimateRows(ultimate) {
 }
 
 /* =========================================================
-   EXPORT EXCEL — struktur kolom mengikuti file casecading
-   (Ultimate → Intermediate → Immediate → Output → Sub Kegiatan),
-   baris lanjutan dikosongkan seperti file aslinya (tanpa merge).
+   EXPORT EXCEL
 ========================================================= */
 
 const EXPORT_HEADER = [
@@ -77,70 +84,118 @@ const EXPORT_HEADER = [
   "Target/ Satuan",
 ];
 
+// Warna ARGB persis seperti file referensi (casecading-1_terisi_intermediate).
+const COLOR_RED = "FFFF5050";
+const COLOR_BLUE = "FF5B9BD5";
+const COLOR_GREEN = "FF92D050";
+const COLOR_ORANGE = "FFFFC000";
+const COLOR_GRAY = "FFD8D8D8";
+const COLOR_YELLOW = "FFFFCC29";
+
+// Warna header per kolom (index 0 = kolom A ... index 22 = kolom W).
+const HEADER_COLORS = [
+  COLOR_RED, COLOR_RED, COLOR_RED, COLOR_RED, // Ultimate Outcome, Tujuan, Indikator, Target
+  COLOR_BLUE, COLOR_RED, COLOR_RED, COLOR_RED, // Intermediate Outcome, Sasaran, Indikator, Target
+  COLOR_GREEN, COLOR_BLUE, COLOR_BLUE, COLOR_BLUE, COLOR_BLUE, // Immediate Outcome, Program, Nomenklatur, Indikator, Target
+  COLOR_ORANGE, COLOR_GREEN, COLOR_GREEN, COLOR_GREEN, COLOR_GREEN, // Output, Kegiatan, Nomenklatur, Indikator, Target
+  COLOR_GRAY, // Output/ Input
+  COLOR_YELLOW, COLOR_YELLOW, COLOR_YELLOW, COLOR_YELLOW, // Sub Kegiatan, Nomenklatur, Indikator, Target
+];
+
+// Di baris DATA, cuma 4 kolom "nama" (Ultimate/Intermediate/Immediate/Output)
+// yang diwarnai — sama seperti file referensi. Kolom lain putih polos.
+const DATA_NAME_COLUMN_COLORS = {
+  0: COLOR_RED, // Ultimate Outcome
+  4: COLOR_BLUE, // Intermediate Outcome
+  8: COLOR_GREEN, // Immediate Outcome
+  13: COLOR_ORANGE, // Output
+};
+
+// Lebar kolom (wch) persis mengikuti file referensi.
+const EXPORT_COLUMN_WIDTHS = [
+  18, 14, 14, 18, 38, 30, 13, 18, 26, 21, 19, 18, 19, 27, 23, 21, 17, 18, 17, 20, 19, 26, 17,
+];
+
+const THIN_BORDER = {
+  top: { style: "thin", color: { rgb: "FF000000" } },
+  bottom: { style: "thin", color: { rgb: "FF000000" } },
+  left: { style: "thin", color: { rgb: "FF000000" } },
+  right: { style: "thin", color: { rgb: "FF000000" } },
+};
+
+function headerCellStyle(bgColor) {
+  return {
+    fill: { patternType: "solid", fgColor: { rgb: bgColor } },
+    font: { bold: true, sz: 11, name: "Calibri", color: { rgb: "FF000000" } },
+    alignment: { horizontal: "center", vertical: "center", wrapText: true },
+    border: THIN_BORDER,
+  };
+}
+
+function dataCellStyle(bgColor) {
+  return {
+    fill: bgColor
+      ? { patternType: "solid", fgColor: { rgb: bgColor } }
+      : { patternType: "none" },
+    font: { sz: 11, name: "Calibri" },
+    alignment: { vertical: "top", wrapText: true },
+    border: THIN_BORDER,
+  };
+}
+
+/**
+ * Susun baris export. Beda dari versi sebelumnya: nilai induk (Ultimate,
+ * Intermediate, Immediate, Output) DIULANG di setiap baris turunannya —
+ * tidak dikosongkan — persis seperti format file referensi (tanpa merge cell).
+ */
 function buildExportRows(renstraList) {
   const rows = [];
 
   renstraList.forEach((renstra) => {
     const ultimate = renstra.ultimateOutcome;
-    let ultimateShown = false;
 
     const intermediates = renstra.intermediates.length
       ? renstra.intermediates
-      : [{ id: "empty", title: "", indicator: "", target: "", immediates: [] }];
+      : [{ id: "empty", title: "", sasaran: "", indicator: "", target: "", immediates: [] }];
 
     intermediates.forEach((intermediate) => {
-      let intermediateShown = false;
-
       const immediates = intermediate.immediates.length
         ? intermediate.immediates
-        : [{ id: "empty", title: "", indicator: "", target: "", outputs: [] }];
+        : [{ id: "empty", title: "", program: "", nomenklaturSipd: "", indicator: "", target: "", outputs: [] }];
 
       immediates.forEach((immediate) => {
-        let immediateShown = false;
-
         const outputs = immediate.outputs.length
           ? immediate.outputs
-          : [{ id: "empty", title: "", indicator: "", target: "", subKegiatan: [] }];
+          : [{ id: "empty", title: "", kegiatan: "", nomenklaturSipd: "", indicator: "", target: "", outputInput: "", subKegiatan: [] }];
 
         outputs.forEach((output) => {
-          let outputShown = false;
+          const sub = output.subKegiatan?.[0] || {};
 
-          const subs = output.subKegiatan?.length
-            ? output.subKegiatan
-            : [{ id: "empty", title: "", indicator: "", target: "" }];
-
-          subs.forEach((sub) => {
-            rows.push([
-              !ultimateShown ? ultimate.title || "" : "",
-              !ultimateShown ? ultimate.tujuan || "" : "",
-              !ultimateShown ? ultimate.indicator || "" : "",
-              !ultimateShown ? ultimate.target || "" : "",
-              !intermediateShown ? intermediate.title || "" : "",
-              !intermediateShown ? intermediate.sasaran || "" : "",
-              !intermediateShown ? intermediate.indicator || "" : "",
-              !intermediateShown ? intermediate.target || "" : "",
-              !immediateShown ? immediate.title || "" : "",
-              !immediateShown ? immediate.program || "" : "",
-              !immediateShown ? immediate.nomenklaturSipd || "" : "",
-              !immediateShown ? immediate.indicator || "" : "",
-              !immediateShown ? immediate.target || "" : "",
-              !outputShown ? output.title || "" : "",
-              !outputShown ? output.kegiatan || "" : "",
-              !outputShown ? output.nomenklaturSipd || "" : "",
-              !outputShown ? output.indicator || "" : "",
-              !outputShown ? output.target || "" : "",
-              !outputShown ? output.outputInput || "" : "",
-              sub.title || "",
-              sub.nomenklaturSipd || "",
-              sub.indicator || "",
-              sub.target || "",
-            ]);
-
-            ultimateShown = true;
-            intermediateShown = true;
-            immediateShown = true;
-            outputShown = true;
-          });
+          rows.push([
+            ultimate.title || "",
+            ultimate.tujuan || "",
+            ultimate.indicator || "",
+            ultimate.target || "",
+            intermediate.title || "",
+            intermediate.sasaran || "",
+            intermediate.indicator || "",
+            intermediate.target || "",
+            immediate.title || "",
+            immediate.program || "",
+            immediate.nomenklaturSipd || "",
+            immediate.indicator || "",
+            immediate.target || "",
+            output.title || "",
+            output.kegiatan || "",
+            output.nomenklaturSipd || "",
+            output.indicator || "",
+            output.target || "",
+            output.outputInput || "",
+            sub.title || "",
+            sub.nomenklaturSipd || "",
+            sub.indicator || "",
+            sub.target || "",
+          ]);
         });
       });
     });
@@ -150,10 +205,27 @@ function buildExportRows(renstraList) {
 }
 
 function exportRenstraToExcel(renstraList, year) {
-  const sheetData = [EXPORT_HEADER, ...buildExportRows(renstraList)];
+  const dataRows = buildExportRows(renstraList);
+  const sheetData = [EXPORT_HEADER, ...dataRows];
   const worksheet = XLSX.utils.aoa_to_sheet(sheetData);
 
-  worksheet["!cols"] = EXPORT_HEADER.map(() => ({ wch: 24 }));
+  // Terapkan style ke tiap sel: header (baris 0) vs data (baris 1+).
+  for (let rowIndex = 0; rowIndex < sheetData.length; rowIndex++) {
+    for (let colIndex = 0; colIndex < EXPORT_HEADER.length; colIndex++) {
+      const cellRef = XLSX.utils.encode_cell({ r: rowIndex, c: colIndex });
+
+      if (!worksheet[cellRef]) {
+        worksheet[cellRef] = { t: "s", v: "" };
+      }
+
+      worksheet[cellRef].s =
+        rowIndex === 0
+          ? headerCellStyle(HEADER_COLORS[colIndex])
+          : dataCellStyle(DATA_NAME_COLUMN_COLORS[colIndex]);
+    }
+  }
+
+  worksheet["!cols"] = EXPORT_COLUMN_WIDTHS.map((wch) => ({ wch }));
   worksheet["!rows"] = [{ hpt: 30 }];
   worksheet["!freeze"] = { xSplit: 0, ySplit: 1 };
 
@@ -171,11 +243,10 @@ const LEVEL_TITLE = {
   "INTERMEDIATE OUTCOME": "Intermediate Outcome",
   "IMMEDIATE OUTCOME": "Immediate Outcome",
   OUTPUT: "Output",
-  "SUB KEGIATAN": "Sub Kegiatan",
 };
 
 /* =========================================================
-   TABLE CELL — nampilin judul + tombol detail
+   TABLE CELL
 ========================================================= */
 
 function RenstraCell({ title, onDetail }) {
@@ -202,11 +273,13 @@ function RenstraCell({ title, onDetail }) {
 }
 
 /* =========================================================
-   DETAIL MODAL — sekarang juga punya Edit & Hapus
+   DETAIL MODAL — hanya Edit, tanpa Hapus
 ========================================================= */
 
-function DetailModal({ data, level, canDelete, onClose, onEdit, onDelete }) {
+function DetailModal({ data, level, onClose, onEdit }) {
   if (!data) return null;
+
+  const sub = data.subKegiatan?.[0] || {};
 
   const configs = {
     "ULTIMATE OUTCOME": [
@@ -237,18 +310,15 @@ function DetailModal({ data, level, canDelete, onClose, onEdit, onDelete }) {
       ["Nomenklatur SIPD", data.nomenklaturSipd],
       ["Indikator", data.indicator],
       ["Target / Satuan", data.target],
-    ],
-
-    "SUB KEGIATAN": [
-      ["Sub Kegiatan", data.title],
-      ["Nomenklatur SIPD", data.nomenklaturSipd],
-      ["Indikator", data.indicator],
-      ["Target / Satuan", data.target],
+      ["Output/ Input", data.outputInput],
+      ["Sub Kegiatan", sub.title],
+      ["Nomenklatur SIPD", sub.nomenklaturSipd],
+      ["Indikator", sub.indicator],
+      ["Target / Satuan", sub.target],
     ],
   };
 
   const fields = configs[level] || [];
-  const headingLabel = level === "SUB KEGIATAN" ? "OUTPUT/ INPUT" : level;
 
   return (
     <div className="fixed inset-0 z-[70] flex items-center justify-center bg-slate-950/50 p-4 backdrop-blur-sm">
@@ -258,10 +328,10 @@ function DetailModal({ data, level, canDelete, onClose, onEdit, onDelete }) {
           <div>
             <div className="flex items-center gap-2">
               <span className="material-symbols-outlined text-blue-800">visibility</span>
-              <h3 className="text-lg font-bold text-slate-900">Detail {headingLabel}</h3>
+              <h3 className="text-lg font-bold text-slate-900">Detail {level}</h3>
             </div>
             <p className="mt-1 text-xs text-slate-500">
-              Informasi lengkap data {headingLabel.toLowerCase()}.
+              Informasi lengkap data {level.toLowerCase()}.
             </p>
           </div>
 
@@ -279,7 +349,7 @@ function DetailModal({ data, level, canDelete, onClose, onEdit, onDelete }) {
           <div className="space-y-4">
             {fields.map(([label, value], index) => (
               <div
-                key={label}
+                key={`${label}-${index}`}
                 className="rounded-lg border border-slate-200 bg-slate-50 p-4"
               >
                 <div className="mb-2 flex items-center gap-2">
@@ -301,29 +371,16 @@ function DetailModal({ data, level, canDelete, onClose, onEdit, onDelete }) {
           </div>
         </div>
 
-        {/* FOOTER — Aksi (Edit / Hapus) sekarang di sini */}
+        {/* FOOTER — hanya Edit, tidak ada Hapus */}
         <div className="flex items-center justify-between gap-2 border-t border-slate-200 bg-slate-50 px-6 py-4">
-          <div className="flex gap-2">
-            <button
-              type="button"
-              onClick={onEdit}
-              className="inline-flex items-center gap-1.5 rounded-md border border-blue-200 bg-white px-4 py-2 text-sm font-semibold text-blue-800 transition hover:border-blue-950 hover:bg-blue-50"
-            >
-              <Pencil className="h-4 w-4" />
-              Edit
-            </button>
-
-            {canDelete && (
-              <button
-                type="button"
-                onClick={onDelete}
-                className="inline-flex items-center gap-1.5 rounded-md border border-red-200 bg-white px-4 py-2 text-sm font-semibold text-red-700 transition hover:border-red-500 hover:bg-red-50"
-              >
-                <Trash2 className="h-4 w-4" />
-                Hapus
-              </button>
-            )}
-          </div>
+          <button
+            type="button"
+            onClick={onEdit}
+            className="inline-flex items-center gap-1.5 rounded-md border border-blue-200 bg-white px-4 py-2 text-sm font-semibold text-blue-800 transition hover:border-blue-950 hover:bg-blue-50"
+          >
+            <Pencil className="h-4 w-4" />
+            Edit
+          </button>
 
           <button
             type="button"
@@ -339,66 +396,28 @@ function DetailModal({ data, level, canDelete, onClose, onEdit, onDelete }) {
 }
 
 /* =========================================================
-   CONFIRM MODAL — pengganti window.confirm() bawaan browser
+   FORM MODAL EDIT
+   Title/nama node TIDAK bisa diubah dari Renstra (read-only),
+   hanya kolom "isi" per level yang bisa diisi/diedit.
 ========================================================= */
 
-function ConfirmModal({ open, title, description, onCancel, onConfirm }) {
-  if (!open) return null;
+function FormModal({ data, level, saving, onClose, onSave }) {
+  const sub = data?.subKegiatan?.[0] || {};
 
-  return (
-    <div className="fixed inset-0 z-[90] flex items-center justify-center bg-slate-950/50 p-4 backdrop-blur-sm">
-      <div className="w-full max-w-sm rounded-xl bg-white p-6 shadow-2xl">
-        <div className="mb-5 flex items-start gap-3">
-          <span className="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-full bg-red-100 text-red-600">
-            <span className="material-symbols-outlined">warning</span>
-          </span>
-          <div>
-            <h3 className="text-base font-bold text-slate-900">
-              {title || "Hapus data ini?"}
-            </h3>
-            <p className="mt-1 text-sm leading-relaxed text-slate-600">
-              {description ||
-                "Data turunannya juga akan ikut terhapus. Tindakan ini tidak bisa dibatalkan."}
-            </p>
-          </div>
-        </div>
-
-        <div className="flex justify-end gap-2">
-          <button
-            type="button"
-            onClick={onCancel}
-            className="rounded-md border border-slate-300 px-4 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-100"
-          >
-            Batal
-          </button>
-          <button
-            type="button"
-            onClick={onConfirm}
-            className="inline-flex items-center gap-1.5 rounded-md bg-red-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-red-700 active:scale-95"
-          >
-            <Trash2 className="h-4 w-4" />
-            Ya, Hapus
-          </button>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-/* =========================================================
-   FORM MODAL TAMBAH / EDIT
-========================================================= */
-
-function FormModal({ mode, data, level, onClose, onSave }) {
   const [form, setForm] = useState({
-    title: data?.title || "",
     tujuan: data?.tujuan || "",
     sasaran: data?.sasaran || "",
     program: data?.program || "",
-    kegiatan: data?.kegiatan || "",
     nomenklaturSipd: data?.nomenklaturSipd || "",
+    kegiatan: data?.kegiatan || "",
+    outputInput: data?.outputInput || "",
     indicator: data?.indicator || "",
     target: data?.target || "",
+
+    subKegiatanTitle: sub.title || "",
+    subKegiatanNomenklaturSipd: sub.nomenklaturSipd || "",
+    subKegiatanIndicator: sub.indicator || "",
+    subKegiatanTarget: sub.target || "",
   });
 
   const changeField = (field, value) => {
@@ -406,12 +425,7 @@ function FormModal({ mode, data, level, onClose, onSave }) {
   };
 
   const handleSubmit = () => {
-    if (!form.title.trim()) {
-      alert("Nama / judul data wajib diisi.");
-      return;
-    }
-
-    onSave({ ...data, ...form });
+    onSave(form);
   };
 
   return (
@@ -421,7 +435,7 @@ function FormModal({ mode, data, level, onClose, onSave }) {
         <div className="flex items-center justify-between border-b border-slate-200 px-6 py-4">
           <div>
             <p className="text-xs font-bold uppercase tracking-widest text-blue-700">
-              {mode === "edit" ? "Edit Data" : "Tambah Data"}
+              Edit Isi Data
             </p>
             <h3 className="mt-1 text-xl font-bold text-slate-900">{LEVEL_TITLE[level]}</h3>
           </div>
@@ -438,17 +452,14 @@ function FormModal({ mode, data, level, onClose, onSave }) {
         {/* BODY */}
         <div className="overflow-y-auto p-6">
           <div className="space-y-5">
+            {/* NAMA — read-only, milik Pohon Kinerja */}
             <div>
               <label className="mb-1 block text-xs font-semibold uppercase tracking-wider text-slate-500">
-                {LEVEL_TITLE[level]}
+                {LEVEL_TITLE[level]} <span className="normal-case font-normal text-slate-400">(tidak bisa diubah di sini)</span>
               </label>
-              <textarea
-                value={form.title}
-                onChange={(event) => changeField("title", event.target.value)}
-                rows={4}
-                placeholder={`Masukkan ${LEVEL_TITLE[level].toLowerCase()}...`}
-                className="w-full resize-y rounded-md border border-slate-300 p-3 text-sm text-slate-700 outline-none transition focus:border-blue-950 focus:ring-2 focus:ring-blue-950/20"
-              />
+              <div className="w-full rounded-md border border-slate-200 bg-slate-100 p-3 text-sm text-slate-500">
+                {data?.title || "-"}
+              </div>
             </div>
 
             {level === "ULTIMATE OUTCOME" && (
@@ -541,312 +552,32 @@ function FormModal({ mode, data, level, onClose, onSave }) {
               </>
             )}
 
-            {level === "SUB KEGIATAN" && (
-              <div>
-                <label className="mb-1 block text-xs font-semibold uppercase tracking-wider text-slate-500">
-                  Nomenklatur SIPD
-                </label>
-                <input
-                  type="text"
-                  value={form.nomenklaturSipd}
-                  onChange={(event) => changeField("nomenklaturSipd", event.target.value)}
-                  placeholder="Masukkan kode nomenklatur SIPD..."
-                  className="w-full rounded-md border border-slate-300 p-3 text-sm text-slate-700 outline-none transition focus:border-blue-950 focus:ring-2 focus:ring-blue-950/20"
-                />
-              </div>
-            )}
-
-            <div>
-              <label className="mb-1 block text-xs font-semibold uppercase tracking-wider text-slate-500">
-                Indikator
-              </label>
-              <textarea
-                value={form.indicator}
-                onChange={(event) => changeField("indicator", event.target.value)}
-                rows={3}
-                placeholder="Masukkan indikator..."
-                className="w-full resize-y rounded-md border border-slate-300 p-3 text-sm text-slate-700 outline-none transition focus:border-blue-950 focus:ring-2 focus:ring-blue-950/20"
-              />
-            </div>
-
-            <div>
-              <label className="mb-1 block text-xs font-semibold uppercase tracking-wider text-slate-500">
-                Target / Satuan
-              </label>
-              <input
-                type="text"
-                value={form.target}
-                onChange={(event) => changeField("target", event.target.value)}
-                placeholder="Contoh: 100%, 10 kegiatan, Baik"
-                className="w-full rounded-md border border-slate-300 p-3 text-sm text-slate-700 outline-none transition focus:border-blue-950 focus:ring-2 focus:ring-blue-950/20"
-              />
-            </div>
-          </div>
-        </div>
-
-        {/* FOOTER */}
-        <div className="flex justify-end gap-2 border-t border-slate-200 bg-slate-50 px-6 py-4">
-          <button
-            type="button"
-            onClick={onClose}
-            className="rounded-md border border-slate-300 px-4 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-100"
-          >
-            Batal
-          </button>
-
-          <button
-            type="button"
-            onClick={handleSubmit}
-            className="rounded-md bg-blue-950 px-5 py-2 text-sm font-semibold text-white transition hover:bg-blue-900"
-          >
-            <span className="material-symbols-outlined mr-1 align-middle text-[16px]">save</span>
-            Simpan
-          </button>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-/* =========================================================
-   MODAL TAMBAH DATA
-========================================================= */
-
-function AddDataModal({ data, year, onClose, onAdd }) {
-  const [level, setLevel] = useState("INTERMEDIATE OUTCOME");
-  const [intermediateId, setIntermediateId] = useState(data.intermediates[0]?.id || "");
-  const [immediateId, setImmediateId] = useState("");
-  const [outputId, setOutputId] = useState("");
-  const [form, setForm] = useState({
-    title: "",
-    tujuan: "",
-    sasaran: "",
-    program: "",
-    kegiatan: "",
-    nomenklaturSipd: "",
-    indicator: "",
-    target: "",
-  });
-
-  const intermediates = data.intermediates;
-  const selectedIntermediate = intermediates.find((item) => item.id === intermediateId);
-  const immediates = selectedIntermediate?.immediates || [];
-  const selectedImmediate = immediates.find((item) => item.id === immediateId);
-  const outputs = selectedImmediate?.outputs || [];
-
-  const changeForm = (field, value) => {
-    setForm((current) => ({ ...current, [field]: value }));
-  };
-
-  const handleLevelChange = (value) => {
-    setLevel(value);
-    setForm({
-      title: "",
-      tujuan: "",
-      sasaran: "",
-      program: "",
-      kegiatan: "",
-      nomenklaturSipd: "",
-      indicator: "",
-      target: "",
-    });
-
-    if (value === "IMMEDIATE OUTCOME" && !immediateId && immediates.length > 0) {
-      setImmediateId(immediates[0].id);
-    }
-
-    if (value === "OUTPUT" && !outputId && outputs.length > 0) {
-      setOutputId(outputs[0].id);
-    }
-  };
-
-  const submit = () => {
-    if (!form.title.trim()) {
-      alert("Nama / judul data wajib diisi.");
-      return;
-    }
-
-    if (level === "IMMEDIATE OUTCOME" && !intermediateId) {
-      alert("Pilih Intermediate Outcome terlebih dahulu.");
-      return;
-    }
-
-    if (level === "OUTPUT" && (!intermediateId || !immediateId)) {
-      alert("Pilih Intermediate dan Immediate terlebih dahulu.");
-      return;
-    }
-
-    if (level === "SUB KEGIATAN" && (!intermediateId || !immediateId || !outputId)) {
-      alert("Pilih Intermediate, Immediate, dan Output terlebih dahulu.");
-      return;
-    }
-
-    onAdd({ level, form, intermediateId, immediateId, outputId, year });
-  };
-
-  return (
-    <div className="fixed inset-0 z-[80] flex items-center justify-center bg-slate-950/50 p-4 backdrop-blur-sm">
-      <div className="flex max-h-[90vh] w-full max-w-2xl flex-col overflow-hidden rounded-xl bg-white shadow-2xl">
-        {/* HEADER */}
-        <div className="flex items-center justify-between border-b border-slate-200 px-6 py-4">
-          <div>
-            <p className="text-xs font-bold uppercase tracking-widest text-blue-700">Tambah Data</p>
-            <h3 className="mt-1 text-xl font-bold text-slate-900">Tambah Struktur Renstra</h3>
-          </div>
-
-          <button
-            type="button"
-            onClick={onClose}
-            className="rounded-md p-1 text-slate-400 hover:bg-slate-100 hover:text-red-600"
-          >
-            <span className="material-symbols-outlined">close</span>
-          </button>
-        </div>
-
-        {/* BODY */}
-        <div className="overflow-y-auto p-6">
-          <div className="space-y-5">
-            {/* LEVEL */}
-            <div>
-              <label className="mb-1 block text-xs font-semibold uppercase tracking-wider text-slate-500">
-                Level Data
-              </label>
-              <select
-                value={level}
-                onChange={(event) => handleLevelChange(event.target.value)}
-                className="w-full rounded-md border border-slate-300 p-3 text-sm outline-none focus:border-blue-950"
-              >
-                <option>INTERMEDIATE OUTCOME</option>
-                <option>IMMEDIATE OUTCOME</option>
-                <option>OUTPUT</option>
-                <option>SUB KEGIATAN</option>
-              </select>
-            </div>
-
-            {/* INTERMEDIATE PARENT */}
-            {level !== "INTERMEDIATE OUTCOME" && (
-              <div>
-                <label className="mb-1 block text-xs font-semibold uppercase tracking-wider text-slate-500">
-                  Intermediate Outcome
-                </label>
-                <select
-                  value={intermediateId}
-                  onChange={(event) => {
-                    setIntermediateId(event.target.value);
-                    setImmediateId("");
-                    setOutputId("");
-                  }}
-                  className="w-full rounded-md border border-slate-300 p-3 text-sm outline-none focus:border-blue-950"
-                >
-                  <option value="">Pilih Intermediate Outcome</option>
-                  {intermediates.map((item) => (
-                    <option key={item.id} value={item.id}>
-                      {item.title}
-                    </option>
-                  ))}
-                </select>
-              </div>
-            )}
-
-            {/* IMMEDIATE PARENT */}
-            {(level === "OUTPUT" || level === "SUB KEGIATAN") && (
-              <div>
-                <label className="mb-1 block text-xs font-semibold uppercase tracking-wider text-slate-500">
-                  Immediate Outcome
-                </label>
-                <select
-                  value={immediateId}
-                  onChange={(event) => {
-                    setImmediateId(event.target.value);
-                    setOutputId("");
-                  }}
-                  className="w-full rounded-md border border-slate-300 p-3 text-sm outline-none focus:border-blue-950"
-                >
-                  <option value="">Pilih Immediate Outcome</option>
-                  {immediates.map((item) => (
-                    <option key={item.id} value={item.id}>
-                      {item.title}
-                    </option>
-                  ))}
-                </select>
-              </div>
-            )}
-
-            {/* OUTPUT PARENT */}
-            {level === "SUB KEGIATAN" && (
-              <div>
-                <label className="mb-1 block text-xs font-semibold uppercase tracking-wider text-slate-500">
-                  Output
-                </label>
-                <select
-                  value={outputId}
-                  onChange={(event) => setOutputId(event.target.value)}
-                  className="w-full rounded-md border border-slate-300 p-3 text-sm outline-none focus:border-blue-950"
-                >
-                  <option value="">Pilih Output</option>
-                  {outputs.map((item) => (
-                    <option key={item.id} value={item.id}>
-                      {item.title}
-                    </option>
-                  ))}
-                </select>
-              </div>
-            )}
-
-            {/* NAMA */}
-            <div>
-              <label className="mb-1 block text-xs font-semibold uppercase tracking-wider text-slate-500">
-                Nama / Judul
-              </label>
-              <textarea
-                value={form.title}
-                onChange={(event) => changeForm("title", event.target.value)}
-                rows={4}
-                placeholder="Masukkan data..."
-                className="w-full resize-y rounded-md border border-slate-300 p-3 text-sm outline-none focus:border-blue-950 focus:ring-2 focus:ring-blue-950/20"
-              />
-            </div>
-
-            {level === "INTERMEDIATE OUTCOME" && (
-              <div>
-                <label className="mb-1 block text-xs font-semibold uppercase tracking-wider text-slate-500">
-                  Sasaran
-                </label>
-                <textarea
-                  value={form.sasaran}
-                  onChange={(event) => changeForm("sasaran", event.target.value)}
-                  rows={3}
-                  placeholder="Masukkan sasaran..."
-                  className="w-full resize-y rounded-md border border-slate-300 p-3 text-sm outline-none focus:border-blue-950 focus:ring-2 focus:ring-blue-950/20"
-                />
-              </div>
-            )}
-
-            {level === "IMMEDIATE OUTCOME" && (
+            {/* INDIKATOR & TARGET — dipakai semua level kecuali OUTPUT (OUTPUT taruh setelah Output/Input) */}
+            {level !== "OUTPUT" && (
               <>
                 <div>
                   <label className="mb-1 block text-xs font-semibold uppercase tracking-wider text-slate-500">
-                    Program
+                    Indikator
                   </label>
                   <textarea
-                    value={form.program}
-                    onChange={(event) => changeForm("program", event.target.value)}
-                    rows={2}
-                    placeholder="Masukkan nama program..."
-                    className="w-full resize-y rounded-md border border-slate-300 p-3 text-sm outline-none focus:border-blue-950 focus:ring-2 focus:ring-blue-950/20"
+                    value={form.indicator}
+                    onChange={(event) => changeField("indicator", event.target.value)}
+                    rows={3}
+                    placeholder="Masukkan indikator..."
+                    className="w-full resize-y rounded-md border border-slate-300 p-3 text-sm text-slate-700 outline-none transition focus:border-blue-950 focus:ring-2 focus:ring-blue-950/20"
                   />
                 </div>
 
                 <div>
                   <label className="mb-1 block text-xs font-semibold uppercase tracking-wider text-slate-500">
-                    Nomenklatur SIPD
+                    Target / Satuan
                   </label>
                   <input
                     type="text"
-                    value={form.nomenklaturSipd}
-                    onChange={(event) => changeForm("nomenklaturSipd", event.target.value)}
-                    placeholder="Masukkan kode nomenklatur SIPD..."
-                    className="w-full rounded-md border border-slate-300 p-3 text-sm outline-none focus:border-blue-950 focus:ring-2 focus:ring-blue-950/20"
+                    value={form.target}
+                    onChange={(event) => changeField("target", event.target.value)}
+                    placeholder="Contoh: 100%, 10 kegiatan, Baik"
+                    className="w-full rounded-md border border-slate-300 p-3 text-sm text-slate-700 outline-none transition focus:border-blue-950 focus:ring-2 focus:ring-blue-950/20"
                   />
                 </div>
               </>
@@ -856,14 +587,53 @@ function AddDataModal({ data, year, onClose, onAdd }) {
               <>
                 <div>
                   <label className="mb-1 block text-xs font-semibold uppercase tracking-wider text-slate-500">
-                    Kegiatan
+                    Indikator
                   </label>
                   <textarea
-                    value={form.kegiatan}
-                    onChange={(event) => changeForm("kegiatan", event.target.value)}
+                    value={form.indicator}
+                    onChange={(event) => changeField("indicator", event.target.value)}
                     rows={3}
-                    placeholder="Masukkan kegiatan..."
-                    className="w-full resize-y rounded-md border border-slate-300 p-3 text-sm outline-none focus:border-blue-950 focus:ring-2 focus:ring-blue-950/20"
+                    placeholder="Masukkan indikator..."
+                    className="w-full resize-y rounded-md border border-slate-300 p-3 text-sm text-slate-700 outline-none transition focus:border-blue-950 focus:ring-2 focus:ring-blue-950/20"
+                  />
+                </div>
+
+                <div>
+                  <label className="mb-1 block text-xs font-semibold uppercase tracking-wider text-slate-500">
+                    Target / Satuan
+                  </label>
+                  <input
+                    type="text"
+                    value={form.target}
+                    onChange={(event) => changeField("target", event.target.value)}
+                    placeholder="Contoh: 100%, 10 kegiatan"
+                    className="w-full rounded-md border border-slate-300 p-3 text-sm text-slate-700 outline-none transition focus:border-blue-950 focus:ring-2 focus:ring-blue-950/20"
+                  />
+                </div>
+
+                <div>
+                  <label className="mb-1 block text-xs font-semibold uppercase tracking-wider text-slate-500">
+                    Output/ Input
+                  </label>
+                  <input
+                    type="text"
+                    value={form.outputInput}
+                    onChange={(event) => changeField("outputInput", event.target.value)}
+                    placeholder="Masukkan output/input..."
+                    className="w-full rounded-md border border-slate-300 p-3 text-sm text-slate-700 outline-none transition focus:border-blue-950 focus:ring-2 focus:ring-blue-950/20"
+                  />
+                </div>
+
+                <div>
+                  <label className="mb-1 block text-xs font-semibold uppercase tracking-wider text-slate-500">
+                    Sub Kegiatan
+                  </label>
+                  <textarea
+                    value={form.subKegiatanTitle}
+                    onChange={(event) => changeField("subKegiatanTitle", event.target.value)}
+                    rows={2}
+                    placeholder="Masukkan sub kegiatan..."
+                    className="w-full resize-y rounded-md border border-slate-300 p-3 text-sm text-slate-700 outline-none transition focus:border-blue-950 focus:ring-2 focus:ring-blue-950/20"
                   />
                 </div>
 
@@ -873,57 +643,40 @@ function AddDataModal({ data, year, onClose, onAdd }) {
                   </label>
                   <input
                     type="text"
-                    value={form.nomenklaturSipd}
-                    onChange={(event) => changeForm("nomenklaturSipd", event.target.value)}
+                    value={form.subKegiatanNomenklaturSipd}
+                    onChange={(event) => changeField("subKegiatanNomenklaturSipd", event.target.value)}
                     placeholder="Masukkan kode nomenklatur SIPD..."
-                    className="w-full rounded-md border border-slate-300 p-3 text-sm outline-none focus:border-blue-950 focus:ring-2 focus:ring-blue-950/20"
+                    className="w-full rounded-md border border-slate-300 p-3 text-sm text-slate-700 outline-none transition focus:border-blue-950 focus:ring-2 focus:ring-blue-950/20"
+                  />
+                </div>
+
+                <div>
+                  <label className="mb-1 block text-xs font-semibold uppercase tracking-wider text-slate-500">
+                    Indikator
+                  </label>
+                  <textarea
+                    value={form.subKegiatanIndicator}
+                    onChange={(event) => changeField("subKegiatanIndicator", event.target.value)}
+                    rows={2}
+                    placeholder="Masukkan indikator sub kegiatan..."
+                    className="w-full resize-y rounded-md border border-slate-300 p-3 text-sm text-slate-700 outline-none transition focus:border-blue-950 focus:ring-2 focus:ring-blue-950/20"
+                  />
+                </div>
+
+                <div>
+                  <label className="mb-1 block text-xs font-semibold uppercase tracking-wider text-slate-500">
+                    Target / Satuan
+                  </label>
+                  <input
+                    type="text"
+                    value={form.subKegiatanTarget}
+                    onChange={(event) => changeField("subKegiatanTarget", event.target.value)}
+                    placeholder="Contoh: 100%, 12 Kegiatan"
+                    className="w-full rounded-md border border-slate-300 p-3 text-sm text-slate-700 outline-none transition focus:border-blue-950 focus:ring-2 focus:ring-blue-950/20"
                   />
                 </div>
               </>
             )}
-
-            {level === "SUB KEGIATAN" && (
-              <div>
-                <label className="mb-1 block text-xs font-semibold uppercase tracking-wider text-slate-500">
-                  Nomenklatur SIPD
-                </label>
-                <input
-                  type="text"
-                  value={form.nomenklaturSipd}
-                  onChange={(event) => changeForm("nomenklaturSipd", event.target.value)}
-                  placeholder="Masukkan kode nomenklatur SIPD..."
-                  className="w-full rounded-md border border-slate-300 p-3 text-sm outline-none focus:border-blue-950 focus:ring-2 focus:ring-blue-950/20"
-                />
-              </div>
-            )}
-
-            {/* INDIKATOR */}
-            <div>
-              <label className="mb-1 block text-xs font-semibold uppercase tracking-wider text-slate-500">
-                Indikator
-              </label>
-              <textarea
-                value={form.indicator}
-                onChange={(event) => changeForm("indicator", event.target.value)}
-                rows={3}
-                placeholder="Masukkan indikator..."
-                className="w-full resize-y rounded-md border border-slate-300 p-3 text-sm outline-none focus:border-blue-950 focus:ring-2 focus:ring-blue-950/20"
-              />
-            </div>
-
-            {/* TARGET */}
-            <div>
-              <label className="mb-1 block text-xs font-semibold uppercase tracking-wider text-slate-500">
-                Target / Satuan
-              </label>
-              <input
-                type="text"
-                value={form.target}
-                onChange={(event) => changeForm("target", event.target.value)}
-                placeholder="Contoh: 100%, 10 kegiatan"
-                className="w-full rounded-md border border-slate-300 p-3 text-sm outline-none focus:border-blue-950 focus:ring-2 focus:ring-blue-950/20"
-              />
-            </div>
           </div>
         </div>
 
@@ -932,18 +685,20 @@ function AddDataModal({ data, year, onClose, onAdd }) {
           <button
             type="button"
             onClick={onClose}
-            className="rounded-md border border-slate-300 px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-100"
+            disabled={saving}
+            className="rounded-md border border-slate-300 px-4 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-50"
           >
             Batal
           </button>
 
           <button
             type="button"
-            onClick={submit}
-            className="rounded-md bg-blue-950 px-5 py-2 text-sm font-semibold text-white hover:bg-blue-900"
+            onClick={handleSubmit}
+            disabled={saving}
+            className="rounded-md bg-blue-950 px-5 py-2 text-sm font-semibold text-white transition hover:bg-blue-900 disabled:cursor-not-allowed disabled:opacity-60"
           >
-            <span className="material-symbols-outlined mr-1 align-middle text-[16px]">add</span>
-            Tambahkan
+            <span className="material-symbols-outlined mr-1 align-middle text-[16px]">save</span>
+            {saving ? "Menyimpan..." : "Simpan"}
           </button>
         </div>
       </div>
@@ -952,8 +707,7 @@ function AddDataModal({ data, year, onClose, onAdd }) {
 }
 
 /* =========================================================
-   TABLE — kolom Aksi dihapus, judul tampil langsung di sel,
-   klik "Lihat Detail" untuk detail + edit + hapus
+   TABLE — 4 kolom, 1 baris per Output
 ========================================================= */
 
 function RenstraTable({ data, onDetail }) {
@@ -962,20 +716,17 @@ function RenstraTable({ data, onDetail }) {
       <table className="w-full table-fixed border-collapse">
         <thead>
           <tr>
-            <th className="w-1/5 border border-slate-300 bg-blue-950 px-2 py-4 text-center text-[10px] font-bold uppercase leading-tight text-white">
+            <th className="w-1/4 border border-slate-300 bg-blue-950 px-2 py-4 text-center text-[10px] font-bold uppercase leading-tight text-white">
               Ultimate Outcome
             </th>
-            <th className="w-1/5 border border-slate-300 bg-blue-950 px-2 py-4 text-center text-[10px] font-bold uppercase leading-tight text-white">
+            <th className="w-1/4 border border-slate-300 bg-blue-950 px-2 py-4 text-center text-[10px] font-bold uppercase leading-tight text-white">
               Intermediate Outcome
             </th>
-            <th className="w-1/5 border border-slate-300 bg-blue-950 px-2 py-4 text-center text-[10px] font-bold uppercase leading-tight text-white">
+            <th className="w-1/4 border border-slate-300 bg-blue-950 px-2 py-4 text-center text-[10px] font-bold uppercase leading-tight text-white">
               Immediate Outcome
             </th>
-            <th className="w-1/5 border border-slate-300 bg-blue-950 px-2 py-4 text-center text-[10px] font-bold uppercase leading-tight text-white">
+            <th className="w-1/4 border border-slate-300 bg-blue-950 px-2 py-4 text-center text-[10px] font-bold uppercase leading-tight text-white">
               Output
-            </th>
-            <th className="w-1/5 border border-slate-300 bg-blue-950 px-2 py-4 text-center text-[10px] font-bold uppercase leading-tight text-white">
-              Output/ Input
             </th>
           </tr>
         </thead>
@@ -983,7 +734,7 @@ function RenstraTable({ data, onDetail }) {
         <tbody>
           {data.length === 0 && (
             <tr>
-              <td colSpan={5} className="px-6 py-12 text-center">
+              <td colSpan={4} className="px-6 py-12 text-center">
                 <span className="material-symbols-outlined mb-2 block text-4xl text-slate-300">
                   folder_open
                 </span>
@@ -1005,131 +756,97 @@ function RenstraTable({ data, onDetail }) {
                 const immediateRows = countImmediateRows(immediate);
                 let immediateRendered = false;
 
-                return immediate.outputs.map((output) => {
-                  const outputRows = countOutputRows(output);
-                  let outputRendered = false;
+                const outputs = immediate.outputs?.length
+                  ? immediate.outputs
+                  : [{ id: createId("empty"), title: "", kegiatan: "", nomenklaturSipd: "", indicator: "", target: "", outputInput: "", subKegiatan: [] }];
 
-                  const subKegiatan = output.subKegiatan?.length
-                    ? output.subKegiatan
-                    : [{ id: createId("empty"), title: "", indicator: "", target: "" }];
+                return outputs.map((output) => (
+                  <tr
+                    key={`${renstra.id}-${intermediate.id}-${immediate.id}-${output.id}`}
+                    className="align-middle transition hover:bg-blue-50/40"
+                  >
+                    {/* ULTIMATE */}
+                    {!ultimateRendered &&
+                      (() => {
+                        ultimateRendered = true;
+                        return (
+                          <td
+                            rowSpan={ultimateRows}
+                            className="border border-slate-200 bg-white p-1.5 align-middle"
+                          >
+                            <RenstraCell
+                              title={ultimate.title}
+                              onDetail={() =>
+                                onDetail(ultimate, "ULTIMATE OUTCOME", {
+                                  renstraId: renstra.id,
+                                })
+                              }
+                            />
+                          </td>
+                        );
+                      })()}
 
-                  return subKegiatan.map((sub, subIndex) => {
-                    const firstSub = subIndex === 0;
+                    {/* INTERMEDIATE */}
+                    {!intermediateRendered &&
+                      (() => {
+                        intermediateRendered = true;
+                        return (
+                          <td
+                            rowSpan={intermediateRows}
+                            className="border border-slate-200 bg-white p-1.5 align-middle"
+                          >
+                            <RenstraCell
+                              title={intermediate.title}
+                              onDetail={() =>
+                                onDetail(intermediate, "INTERMEDIATE OUTCOME", {
+                                  renstraId: renstra.id,
+                                  intermediateId: intermediate.id,
+                                })
+                              }
+                            />
+                          </td>
+                        );
+                      })()}
 
-                    return (
-                      <tr
-                        key={`${renstra.id}-${intermediate.id}-${immediate.id}-${output.id}-${sub.id}`}
-                        className="align-middle transition hover:bg-blue-50/40"
-                      >
-                        {/* ULTIMATE */}
-                        {!ultimateRendered &&
-                          (() => {
-                            ultimateRendered = true;
-                            return (
-                              <td
-                                rowSpan={ultimateRows}
-                                className="border border-slate-200 bg-white p-1.5 align-middle"
-                              >
-                                <RenstraCell
-                                  title={ultimate.title}
-                                  onDetail={() =>
-                                    onDetail(ultimate, "ULTIMATE OUTCOME", {
-                                      renstraId: renstra.id,
-                                    })
-                                  }
-                                />
-                              </td>
-                            );
-                          })()}
+                    {/* IMMEDIATE */}
+                    {!immediateRendered &&
+                      (() => {
+                        immediateRendered = true;
+                        return (
+                          <td
+                            rowSpan={immediateRows}
+                            className="border border-slate-200 bg-white p-1.5 align-middle"
+                          >
+                            <RenstraCell
+                              title={immediate.title}
+                              onDetail={() =>
+                                onDetail(immediate, "IMMEDIATE OUTCOME", {
+                                  renstraId: renstra.id,
+                                  intermediateId: intermediate.id,
+                                  immediateId: immediate.id,
+                                })
+                              }
+                            />
+                          </td>
+                        );
+                      })()}
 
-                        {/* INTERMEDIATE */}
-                        {!intermediateRendered &&
-                          (() => {
-                            intermediateRendered = true;
-                            return (
-                              <td
-                                rowSpan={intermediateRows}
-                                className="border border-slate-200 bg-white p-1.5 align-middle"
-                              >
-                                <RenstraCell
-                                  title={intermediate.title}
-                                  onDetail={() =>
-                                    onDetail(intermediate, "INTERMEDIATE OUTCOME", {
-                                      renstraId: renstra.id,
-                                      intermediateId: intermediate.id,
-                                    })
-                                  }
-                                />
-                              </td>
-                            );
-                          })()}
-
-                        {/* IMMEDIATE */}
-                        {!immediateRendered &&
-                          (() => {
-                            immediateRendered = true;
-                            return (
-                              <td
-                                rowSpan={immediateRows}
-                                className="border border-slate-200 bg-white p-1.5 align-middle"
-                              >
-                                <RenstraCell
-                                  title={immediate.title}
-                                  onDetail={() =>
-                                    onDetail(immediate, "IMMEDIATE OUTCOME", {
-                                      renstraId: renstra.id,
-                                      intermediateId: intermediate.id,
-                                      immediateId: immediate.id,
-                                    })
-                                  }
-                                />
-                              </td>
-                            );
-                          })()}
-
-                        {/* OUTPUT */}
-                        {!outputRendered &&
-                          (() => {
-                            outputRendered = true;
-                            return (
-                              <td
-                                rowSpan={outputRows}
-                                className="border border-slate-200 bg-white p-1.5 align-middle"
-                              >
-                                <RenstraCell
-                                  title={output.title}
-                                  onDetail={() =>
-                                    onDetail(output, "OUTPUT", {
-                                      renstraId: renstra.id,
-                                      intermediateId: intermediate.id,
-                                      immediateId: immediate.id,
-                                      outputId: output.id,
-                                    })
-                                  }
-                                />
-                              </td>
-                            );
-                          })()}
-
-                        {/* SUB KEGIATAN */}
-                        <td className="border border-slate-200 bg-white p-1.5 align-middle">
-                          <RenstraCell
-                            title={sub.title}
-                            onDetail={() =>
-                              onDetail(sub, "SUB KEGIATAN", {
-                                renstraId: renstra.id,
-                                intermediateId: intermediate.id,
-                                immediateId: immediate.id,
-                                outputId: output.id,
-                                subId: sub.id,
-                              })
-                            }
-                          />
-                        </td>
-                      </tr>
-                    );
-                  });
-                });
+                    {/* OUTPUT (sudah termasuk Output/Input & Sub Kegiatan di dalam detailnya) */}
+                    <td className="border border-slate-200 bg-white p-1.5 align-middle">
+                      <RenstraCell
+                        title={output.title}
+                        onDetail={() =>
+                          onDetail(output, "OUTPUT", {
+                            renstraId: renstra.id,
+                            intermediateId: intermediate.id,
+                            immediateId: immediate.id,
+                            outputId: output.id,
+                          })
+                        }
+                      />
+                    </td>
+                  </tr>
+                ));
               });
             });
           })}
@@ -1148,41 +865,21 @@ function PohonRenstra() {
   const [year, setYear] = useState("2026");
   const [detail, setDetail] = useState(null);
   const [editData, setEditData] = useState(null);
-  const [showAdd, setShowAdd] = useState(false);
-
-  // { level, path } — dipakai ConfirmModal pengganti window.confirm()
-  const [confirmDelete, setConfirmDelete] = useState(null);
+  const [saving, setSaving] = useState(false);
 
   useEffect(() => {
     const fetchRenstra = async () => {
       try {
         const response = await fetch(
-          `http://127.0.0.1:8000/api/renstra?tahun=${year}`
+          `${API_BASE_URL}/renstra?tahun=${year}`
         );
 
         const result = await response.json();
-
-        console.log("DATA DARI BACKEND:", result);
 
         if (!response.ok) {
           setData([]);
           return;
         }
-
-        /*
-         * Backend:
-         * {
-         *   tahun,
-         *   ultimates: [...]
-         * }
-         *
-         * Diubah menjadi format frontend:
-         * {
-         *   year,
-         *   ultimateOutcome,
-         *   intermediates
-         * }
-         */
 
         const formattedData = result.data.flatMap((pohon) =>
           pohon.ultimates.map((ultimate) => ({
@@ -1236,13 +933,21 @@ function PohonRenstra() {
 
   const closeEdit = () => setEditData(null);
 
-  const updateNodeInTree = (level, path, updatedData) => {
+  const updateNodeInTree = (level, path, formValues) => {
     setData((current) =>
       current.map((renstra) => {
         if (renstra.id !== path.renstraId) return renstra;
 
         if (level === "ULTIMATE OUTCOME") {
-          return { ...renstra, ultimateOutcome: { ...renstra.ultimateOutcome, ...updatedData } };
+          return {
+            ...renstra,
+            ultimateOutcome: {
+              ...renstra.ultimateOutcome,
+              tujuan: formValues.tujuan,
+              indicator: formValues.indicator,
+              target: formValues.target,
+            },
+          };
         }
 
         return {
@@ -1250,7 +955,12 @@ function PohonRenstra() {
           intermediates: renstra.intermediates.map((intermediate) => {
             if (level === "INTERMEDIATE OUTCOME") {
               return intermediate.id === path.intermediateId
-                ? { ...intermediate, ...updatedData }
+                ? {
+                    ...intermediate,
+                    sasaran: formValues.sasaran,
+                    indicator: formValues.indicator,
+                    target: formValues.target,
+                  }
                 : intermediate;
             }
 
@@ -1261,7 +971,13 @@ function PohonRenstra() {
               immediates: intermediate.immediates.map((immediate) => {
                 if (level === "IMMEDIATE OUTCOME") {
                   return immediate.id === path.immediateId
-                    ? { ...immediate, ...updatedData }
+                    ? {
+                        ...immediate,
+                        program: formValues.program,
+                        nomenklaturSipd: formValues.nomenklaturSipd,
+                        indicator: formValues.indicator,
+                        target: formValues.target,
+                      }
                     : immediate;
                 }
 
@@ -1270,19 +986,24 @@ function PohonRenstra() {
                 return {
                   ...immediate,
                   outputs: immediate.outputs.map((output) => {
-                    if (level === "OUTPUT") {
-                      return output.id === path.outputId
-                        ? { ...output, ...updatedData }
-                        : output;
-                    }
-
                     if (output.id !== path.outputId) return output;
 
                     return {
                       ...output,
-                      subKegiatan: output.subKegiatan.map((sub) =>
-                        sub.id === path.subId ? { ...sub, ...updatedData } : sub
-                      ),
+                      kegiatan: formValues.kegiatan,
+                      nomenklaturSipd: formValues.nomenklaturSipd,
+                      indicator: formValues.indicator,
+                      target: formValues.target,
+                      outputInput: formValues.outputInput,
+                      subKegiatan: [
+                        {
+                          ...(output.subKegiatan?.[0] || {}),
+                          title: formValues.subKegiatanTitle,
+                          nomenklaturSipd: formValues.subKegiatanNomenklaturSipd,
+                          indicator: formValues.subKegiatanIndicator,
+                          target: formValues.subKegiatanTarget,
+                        },
+                      ],
                     };
                   }),
                 };
@@ -1294,217 +1015,86 @@ function PohonRenstra() {
     );
   };
 
-  const saveEdit = (updatedData) => {
-    updateNodeInTree(editData.level, editData.path, updatedData);
-    closeEdit();
-  };
+  // Simpan ke backend dulu, baru update tampilan lokal kalau berhasil.
+  const saveEdit = async (formValues) => {
+    const { level, path, data: node } = editData;
+    const slug = LEVEL_TO_SLUG[level];
+    const id = node.id;
 
-  /* =======================================================
-     HAPUS (dipicu dari dalam Detail Modal, dikonfirmasi lewat ConfirmModal)
-  ======================================================= */
+    setSaving(true);
 
-  const deleteNodeInTree = (level, path) => {
-    if (level === "ULTIMATE OUTCOME") return;
+    try {
+      let ok = true;
 
-    setData((current) =>
-      current.map((renstra) => {
-        if (renstra.id !== path.renstraId) return renstra;
+      if (level === "OUTPUT") {
+        const [outputRes, subRes] = await Promise.all([
+          fetch(`${API_BASE_URL}/renstra/nodes/output/${id}`, {
+            method: "PUT",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              kegiatan: formValues.kegiatan,
+              nomenklaturSipd: formValues.nomenklaturSipd,
+              indicator: formValues.indicator,
+              target: formValues.target,
+              outputInput: formValues.outputInput,
+            }),
+          }),
+          fetch(`${API_BASE_URL}/renstra/nodes/sub-kegiatan/${id}`, {
+            method: "PUT",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              title: formValues.subKegiatanTitle,
+              nomenklaturSipd: formValues.subKegiatanNomenklaturSipd,
+              indicator: formValues.subKegiatanIndicator,
+              target: formValues.subKegiatanTarget,
+            }),
+          }),
+        ]);
 
-        if (level === "INTERMEDIATE OUTCOME") {
-          return {
-            ...renstra,
-            intermediates: renstra.intermediates.filter(
-              (intermediate) => intermediate.id !== path.intermediateId
-            ),
-          };
-        }
-
-        return {
-          ...renstra,
-          intermediates: renstra.intermediates.map((intermediate) => {
-            if (intermediate.id !== path.intermediateId) return intermediate;
-
-            if (level === "IMMEDIATE OUTCOME") {
-              return {
-                ...intermediate,
-                immediates: intermediate.immediates.filter(
-                  (immediate) => immediate.id !== path.immediateId
-                ),
+        ok = outputRes.ok && subRes.ok;
+      } else {
+        const body =
+          level === "ULTIMATE OUTCOME"
+            ? {
+                tujuan: formValues.tujuan,
+                indicator: formValues.indicator,
+                target: formValues.target,
+              }
+            : level === "INTERMEDIATE OUTCOME"
+            ? {
+                sasaran: formValues.sasaran,
+                indicator: formValues.indicator,
+                target: formValues.target,
+              }
+            : {
+                program: formValues.program,
+                nomenklaturSipd: formValues.nomenklaturSipd,
+                indicator: formValues.indicator,
+                target: formValues.target,
               };
-            }
 
-            return {
-              ...intermediate,
-              immediates: intermediate.immediates.map((immediate) => {
-                if (immediate.id !== path.immediateId) return immediate;
+        const response = await fetch(`${API_BASE_URL}/renstra/nodes/${slug}/${id}`, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(body),
+        });
 
-                if (level === "OUTPUT") {
-                  return {
-                    ...immediate,
-                    outputs: immediate.outputs.filter((output) => output.id !== path.outputId),
-                  };
-                }
+        ok = response.ok;
+      }
 
-                return {
-                  ...immediate,
-                  outputs: immediate.outputs.map((output) => {
-                    if (output.id !== path.outputId) return output;
+      if (!ok) {
+        alert("Gagal menyimpan perubahan ke server.");
+        return;
+      }
 
-                    return {
-                      ...output,
-                      subKegiatan: output.subKegiatan.filter((sub) => sub.id !== path.subId),
-                    };
-                  }),
-                };
-              }),
-            };
-          }),
-        };
-      })
-    );
-  };
-
-  // Dipanggil dari tombol "Hapus" di DetailModal — buka ConfirmModal, belum menghapus apa pun.
-  const deleteFromDetail = (level, path) => {
-    setConfirmDelete({ level, path });
-  };
-
-  // Dipanggil dari tombol "Ya, Hapus" di ConfirmModal — baru benar-benar menghapus.
-  const confirmDeleteNode = () => {
-    if (!confirmDelete) return;
-
-    deleteNodeInTree(confirmDelete.level, confirmDelete.path);
-    setConfirmDelete(null);
-    setDetail(null);
-  };
-
-  const cancelDeleteNode = () => setConfirmDelete(null);
-
-  /* =======================================================
-     TAMBAH DATA
-  ======================================================= */
-
-  const addData = ({ level, form, intermediateId, immediateId, outputId, year: selectedYear }) => {
-    setData((current) =>
-      current.map((renstra) => {
-        if (renstra.year !== selectedYear) return renstra;
-
-        if (level === "INTERMEDIATE OUTCOME") {
-          return {
-            ...renstra,
-            intermediates: [
-              ...renstra.intermediates,
-              {
-                id: createId("intermediate"),
-                title: form.title,
-                sasaran: form.sasaran,
-                indicator: form.indicator,
-                target: form.target,
-                immediates: [],
-              },
-            ],
-          };
-        }
-
-        if (level === "IMMEDIATE OUTCOME") {
-          return {
-            ...renstra,
-            intermediates: renstra.intermediates.map((intermediate) =>
-              intermediate.id === intermediateId
-                ? {
-                    ...intermediate,
-                    immediates: [
-                      ...intermediate.immediates,
-                      {
-                        id: createId("immediate"),
-                        title: form.title,
-                        program: form.program,
-                        nomenklaturSipd: form.nomenklaturSipd,
-                        indicator: form.indicator,
-                        target: form.target,
-                        outputs: [],
-                      },
-                    ],
-                  }
-                : intermediate
-            ),
-          };
-        }
-
-        if (level === "OUTPUT") {
-          return {
-            ...renstra,
-            intermediates: renstra.intermediates.map((intermediate) =>
-              intermediate.id === intermediateId
-                ? {
-                    ...intermediate,
-                    immediates: intermediate.immediates.map((immediate) =>
-                      immediate.id === immediateId
-                        ? {
-                            ...immediate,
-                            outputs: [
-                              ...immediate.outputs,
-                              {
-                                id: createId("output"),
-                                title: form.title,
-                                kegiatan: form.kegiatan,
-                                nomenklaturSipd: form.nomenklaturSipd,
-                                indicator: form.indicator,
-                                target: form.target,
-                                subKegiatan: [],
-                              },
-                            ],
-                          }
-                        : immediate
-                    ),
-                  }
-                : intermediate
-            ),
-          };
-        }
-
-        if (level === "SUB KEGIATAN") {
-          return {
-            ...renstra,
-            intermediates: renstra.intermediates.map((intermediate) =>
-              intermediate.id === intermediateId
-                ? {
-                    ...intermediate,
-                    immediates: intermediate.immediates.map((immediate) =>
-                      immediate.id === immediateId
-                        ? {
-                            ...immediate,
-                            outputs: immediate.outputs.map((output) =>
-                              output.id === outputId
-                                ? {
-                                    ...output,
-                                    subKegiatan: [
-                                      ...output.subKegiatan,
-                                      {
-                                        id: createId("sub"),
-                                        title: form.title,
-                                        nomenklaturSipd: form.nomenklaturSipd,
-                                        indicator: form.indicator,
-                                        target: form.target,
-                                      },
-                                    ],
-                                  }
-                                : output
-                            ),
-                          }
-                        : immediate
-                    ),
-                  }
-                : intermediate
-            ),
-          };
-        }
-
-        return renstra;
-      })
-    );
-
-    setShowAdd(false);
+      updateNodeInTree(level, path, formValues);
+      closeEdit();
+    } catch (error) {
+      console.error("Gagal menyimpan perubahan Renstra:", error);
+      alert("Gagal menyimpan perubahan. Periksa koneksi ke server.");
+    } finally {
+      setSaving(false);
+    }
   };
 
   return (
@@ -1522,30 +1112,19 @@ function PohonRenstra() {
           <div>
             <h2 className="mb-1 text-3xl font-bold text-slate-900">Rencana Strategis</h2>
             <p className="text-slate-500">
-              Pengelolaan hierarki rencana strategis organisasi.
+              Pengelolaan isi rencana strategis organisasi.
             </p>
           </div>
 
-          <div className="flex items-center gap-2">
-            <button
-              type="button"
-              onClick={() => exportRenstraToExcel(filteredData, year)}
-              disabled={filteredData.length === 0}
-              className="flex items-center gap-2 rounded-md border border-emerald-600 bg-white px-4 py-2 text-sm font-semibold text-emerald-700 shadow-sm transition hover:bg-emerald-50 disabled:cursor-not-allowed disabled:border-slate-300 disabled:text-slate-400 disabled:hover:bg-white"
-            >
-              <Download className="h-4 w-4" />
-              Export ke Excel
-            </button>
-
-            <button
-              type="button"
-              onClick={() => setShowAdd(true)}
-              className="flex items-center gap-2 rounded-md bg-blue-950 px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-blue-900"
-            >
-              <Plus className="h-4 w-4" />
-              Tambah Data
-            </button>
-          </div>
+          <button
+            type="button"
+            onClick={() => exportRenstraToExcel(filteredData, year)}
+            disabled={filteredData.length === 0}
+            className="flex items-center gap-2 rounded-md border border-emerald-600 bg-white px-4 py-2 text-sm font-semibold text-emerald-700 shadow-sm transition hover:bg-emerald-50 disabled:cursor-not-allowed disabled:border-slate-300 disabled:text-slate-400 disabled:hover:bg-white"
+          >
+            <Download className="h-4 w-4" />
+            Export ke Excel
+          </button>
         </div>
 
         {/* FILTER TAHUN */}
@@ -1573,10 +1152,10 @@ function PohonRenstra() {
             <div>
               <p className="text-sm font-semibold text-blue-900">Struktur Rencana Strategis</p>
               <p className="mt-1 text-xs leading-relaxed text-blue-700">
-                Setiap Ultimate Outcome dapat memiliki beberapa Intermediate Outcome. Setiap
-                Intermediate Outcome dapat memiliki beberapa Immediate Outcome, Output, dan
-                Output/ Input. Klik <b>Lihat Detail</b> untuk melihat, mengedit, atau menghapus
-                data.
+                Struktur Ultimate, Intermediate, Immediate, dan Output berasal dari Pohon
+                Kinerja dan tidak bisa ditambah/dihapus dari sini. Klik <b>Lihat Detail</b>{" "}
+                lalu <b>Edit</b> untuk mengisi atau melengkapi konten (indikator, target,
+                sasaran, program, kegiatan, output/input, dan sub kegiatan).
               </p>
             </div>
           </div>
@@ -1591,40 +1170,21 @@ function PohonRenstra() {
         <DetailModal
           data={detail.data}
           level={detail.level}
-          canDelete={detail.level !== "ULTIMATE OUTCOME"}
           onClose={closeDetail}
           onEdit={() => openEdit(detail.data, detail.level, detail.path)}
-          onDelete={() => deleteFromDetail(detail.level, detail.path)}
         />
       )}
 
       {/* EDIT MODAL */}
       {editData && (
         <FormModal
-          mode="edit"
           data={editData.data}
           level={editData.level}
+          saving={saving}
           onClose={closeEdit}
           onSave={saveEdit}
         />
       )}
-
-      {/* ADD MODAL */}
-      {showAdd && filteredData[0] && (
-        <AddDataModal
-          data={filteredData[0]}
-          year={year}
-          onClose={() => setShowAdd(false)}
-          onAdd={addData}
-        />
-      )}
-
-      {/* CONFIRM DELETE MODAL — pengganti window.confirm() */}
-      <ConfirmModal
-        open={!!confirmDelete}
-        onCancel={cancelDeleteNode}
-        onConfirm={confirmDeleteNode}
-      />
     </>
   );
 }
