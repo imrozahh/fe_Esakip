@@ -867,6 +867,41 @@ function PohonRenstra() {
   const [editData, setEditData] = useState(null);
   const [saving, setSaving] = useState(false);
 
+  // Available years state
+  const [availableYears, setAvailableYears] = useState([]);
+  const [loadingYears, setLoadingYears] = useState(false);
+
+  // Fetch available years on component load
+  useEffect(() => {
+    const fetchYears = async () => {
+      setLoadingYears(true);
+      try {
+        const response = await fetch(`${API_BASE_URL}/renstra/years`, {
+          method: 'GET',
+          headers: {
+            Accept: 'application/json',
+          },
+        });
+
+        const data = await response.json();
+
+        if (response.ok) {
+          setAvailableYears(data.data || []);
+          // Set default year to first available year if available
+          if (data.data && data.data.length > 0) {
+            setYear(String(data.data[0]));
+          }
+        }
+      } catch (err) {
+        console.error('Failed to fetch years:', err);
+      } finally {
+        setLoadingYears(false);
+      }
+    };
+
+    fetchYears();
+  }, []);
+
   useEffect(() => {
     const fetchRenstra = async () => {
       try {
@@ -1136,11 +1171,21 @@ function PohonRenstra() {
             <select
               value={year}
               onChange={(event) => setYear(event.target.value)}
-              className="w-full rounded-md border border-slate-300 bg-white p-2.5 text-sm text-slate-700 outline-none transition focus:border-blue-950 focus:ring-2 focus:ring-blue-950/20"
+              disabled={loadingYears}
+              className="w-full rounded-md border border-slate-300 bg-white p-2.5 text-sm text-slate-700 outline-none transition focus:border-blue-950 focus:ring-2 focus:ring-blue-950/20 disabled:bg-slate-100 disabled:cursor-not-allowed"
             >
-              <option value="2026">2026</option>
-              <option value="2025">2025</option>
-              <option value="2024">2024</option>
+              <option value="">Pilih Tahun</option>
+              {loadingYears ? (
+                <option disabled>Memuat tahun...</option>
+              ) : availableYears.length > 0 ? (
+                availableYears.map((yr) => (
+                  <option key={yr} value={String(yr)}>
+                    {yr}
+                  </option>
+                ))
+              ) : (
+                <option disabled>Tidak ada data tahun</option>
+              )}
             </select>
           </div>
         </div>
