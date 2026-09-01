@@ -120,6 +120,7 @@ function EditablePohonKinerja() {
 
   // Menyimpan node yang dihapus sampai tombol Simpan Perubahan ditekan
   const [deletedNodes, setDeletedNodes] = useState([]);
+  const [newNodes, setNewNodes] = useState([]);
 
   // Filter states
   const [tahun, setTahun] = useState("2026");
@@ -130,6 +131,57 @@ function EditablePohonKinerja() {
   const [errorData, setErrorData] = useState("");
   const [treeData, setTreeData] = useState(null);
   const [pohonKinerjaData, setPohonKinerjaData] = useState(null);
+
+  // Available years state
+  const [availableYears, setAvailableYears] = useState([]);
+  const [loadingYears, setLoadingYears] = useState(false);
+
+  // Archive states
+  const [showArchiveModal, setShowArchiveModal] = useState(false);
+  const [archivedData, setArchivedData] = useState([]);
+  const [loadingArchived, setLoadingArchived] = useState(false);
+  const [showArchivedList, setShowArchivedList] = useState(false);
+  const [archivingId, setArchivingId] = useState(null);
+
+  // Create new year states
+  const [showCreateNewModal, setShowCreateNewModal] = useState(false);
+  const [creatingNewYear, setCreatingNewYear] = useState(false);
+  const [newYearForm, setNewYearForm] = useState({
+    tahun: new Date().getFullYear(),
+    unit_kerja: "DINAS KOMUNIKASI DAN INFORMATIKA",
+  });
+  const [lastAvailableYear, setLastAvailableYear] = useState(null);
+
+  // Fetch available years on component load
+  useEffect(() => {
+    const fetchYears = async () => {
+      setLoadingYears(true);
+      try {
+        const response = await fetch('http://localhost:8000/api/pohon-kinerja/years', {
+          method: 'GET',
+          headers: {
+            Accept: 'application/json',
+          },
+        });
+
+        const data = await response.json();
+
+        if (response.ok) {
+          setAvailableYears(data.data || []);
+          // Set default tahun to first available year if available
+          if (data.data && data.data.length > 0 && !tahun) {
+            setTahun(String(data.data[0]));
+          }
+        }
+      } catch (err) {
+        console.error('Failed to fetch years:', err);
+      } finally {
+        setLoadingYears(false);
+      }
+    };
+
+    fetchYears();
+  }, []);
 
   // Fetch tree data when tahun changes
   useEffect(() => {
@@ -156,6 +208,29 @@ function EditablePohonKinerja() {
         const data = await response.json();
 
         if (!response.ok) {
+          // Jika tahun tidak memiliki data, tampilkan button "Tambah Pohon Kinerja Baru"
+          if (response.status === 404 && data.message && data.message.includes('tidak ditemukan')) {
+            setErrorData("");
+            setTreeData(null);
+            setPohonKinerjaData(null);
+            // Cari tahun sebelumnya sebagai template, bukan tahun yang sedang dibuat
+            const targetYear = parseInt(tahun);
+            const previousYears = availableYears
+              .map(Number)
+              .filter((year) => year < targetYear);
+            const templateYear = previousYears.length > 0
+              ? Math.max(...previousYears)
+              : null;
+
+            setLastAvailableYear(templateYear);
+            setNewYearForm((prev) => ({
+              ...prev,
+              tahun: targetYear,
+              unit_kerja: unitKerja || prev.unit_kerja,
+            }));
+            setLoadingData(false);
+            return;
+          }
           setErrorData(data.error || data.message || "Gagal mengambil data");
           setTreeData(null);
           setPohonKinerjaData(null);
@@ -191,19 +266,54 @@ function EditablePohonKinerja() {
       ? { ...current, [field]: value }
       : { ...current, branches: current.branches.map(updateNode) });
     setSelected((current) => ({ ...current, [field]: value }));
+
+    // Jika node masih baru dan belum masuk database, ikut perbarui antrean POST.
+    if (selected.id?.startsWith("node-")) {
+      setNewNodes((current) =>
+        current.map((node) =>
+          node.id === selected.id ? { ...node, [field]: value } : node
+        )
+      );
+    }
   };
 
   const addNode = (target = selected) => {
+    if (!pohonKinerjaData) {
+      setErrorData("Pohon Kinerja tahun ini belum dibuat. Tambahkan Pohon Kinerja Baru terlebih dahulu.");
+      return;
+    }
+
     const nodeLevel = {
       ULTIMATE: "INTERMEDIATE",
       INTERMEDIATE: "IMMEDIATE",
       IMMEDIATE: "OUTPUT",
       OUTPUT: "OUTPUT",
     }[target.level];
-    const node = { id: `node-${Date.now()}`, level: nodeLevel, title: nodeLevel === "INTERMEDIATE" ? "SASARAN ANTARA BARU" : nodeLevel === "IMMEDIATE" ? "SASARAN LANGSUNG BARU" : "INDIKATOR BARU", indicator: "Tambahkan indikator" };
+
+    const parentId = target.level === "ULTIMATE"
+      ? target.id
+      : target.id;
+
+    const node = {
+      id: `node-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+      level: nodeLevel,
+      title: nodeLevel === "INTERMEDIATE"
+        ? "SASARAN ANTARA BARU"
+        : nodeLevel === "IMMEDIATE"
+          ? "SASARAN LANGSUNG BARU"
+          : "OUTPUT BARU",
+      indicator: "Tambahkan indikator",
+      _parentId: parentId,
+      _isNew: true,
+    };
+
     if (target.level === "ULTIMATE") {
-      setTree((current) => ({ ...current, branches: [...current.branches, { ...node, children: [] }] }));
+      setTree((current) => ({
+        ...current,
+        branches: [...current.branches, { ...node, children: [] }],
+      }));
       setSelected(node);
+      setNewNodes((current) => [...current, node]);
       setSaved(false);
       return;
     }
@@ -211,35 +321,55 @@ function EditablePohonKinerja() {
     if (target.level === "INTERMEDIATE") {
       setTree((current) => ({
         ...current,
-        branches: current.branches.map((branch) => branch.id === target.id
-          ? { ...branch, children: [...(branch.children || []), node] }
-          : branch),
+        branches: current.branches.map((branch) =>
+          branch.id === target.id
+            ? { ...branch, children: [...(branch.children || []), { ...node, children: [] }] }
+            : branch
+        ),
       }));
       setSelected(node);
+      setNewNodes((current) => [...current, node]);
       setSaved(false);
       return;
     }
 
-    const branchId = tree.branches.find((branch) => branch.children.some((child) => child.id === target.id))?.id;
+    const branchId = tree.branches
+      .find((branch) => branch.children?.some((child) => child.id === target.id))?.id;
+
     const parentImmediateId = target.level === "OUTPUT"
-      ? tree.branches.flatMap((branch) => branch.children || []).find((child) => child.children?.some((output) => output.id === target.id))?.id
+      ? tree.branches
+          .flatMap((branch) => branch.children || [])
+          .find((child) => child.children?.some((output) => output.id === target.id))?.id
       : target.id;
-    if (!branchId || !parentImmediateId) return;
+
+    if (!branchId || !parentImmediateId) {
+      setErrorData("Parent node tidak ditemukan.");
+      return;
+    }
+
+    const actualParentId = target.level === "OUTPUT" ? parentImmediateId : target.id;
+    const actualParentLevel = target.level === "OUTPUT" ? "IMMEDIATE" : target.level;
+    const nodeWithParent = { ...node, _parentId: actualParentId, _parentLevel: actualParentLevel };
+
     setTree((current) => ({
       ...current,
-      branches: current.branches.map((branch) => branch.id === branchId
-        ? {
-          ...branch,
-          children: branch.children.map((child) => child.id === parentImmediateId
-            ? { ...child, children: [...(child.children || []), node] }
-            : child),
-        }
-        : branch),
+      branches: current.branches.map((branch) =>
+        branch.id === branchId
+          ? {
+              ...branch,
+              children: branch.children.map((child) =>
+                child.id === parentImmediateId
+                  ? { ...child, children: [...(child.children || []), nodeWithParent] }
+                  : child
+              ),
+            }
+          : branch
+      ),
     }));
-    setSelected(node);
+    setSelected(nodeWithParent);
+    setNewNodes((current) => [...current, nodeWithParent]);
     setSaved(false);
   };
-
   const addIntermediate = () => addNode({ ...tree, id: tree.id || "ultimate", level: "ULTIMATE" });
 
   const addImmediate = (target) => addNode({ ...target, level: "INTERMEDIATE" });
@@ -252,13 +382,18 @@ function EditablePohonKinerja() {
       level: selected.level,
     };
 
-    // Tandai node untuk dihapus dari database saat tombol Simpan Perubahan ditekan.
-    setDeletedNodes((current) => {
-      if (current.some((item) => item.id === deletedNode.id)) {
-        return current;
-      }
-      return [...current, deletedNode];
-    });
+    // Node baru yang belum tersimpan cukup dihapus dari antrean lokal.
+    if (selected.id.startsWith("node-")) {
+      setNewNodes((current) => current.filter((item) => item.id !== selected.id));
+    } else {
+      // Node lama ditandai untuk dihapus dari database saat tombol Simpan Perubahan ditekan.
+      setDeletedNodes((current) => {
+        if (current.some((item) => item.id === deletedNode.id)) {
+          return current;
+        }
+        return [...current, deletedNode];
+      });
+    }
 
     // Hapus node dari tampilan tanpa mengubah struktur/tampilan bagan lainnya.
     setTree((current) => ({
@@ -291,7 +426,79 @@ function EditablePohonKinerja() {
 
   const saveChanges = async () => {
     try {
-      // 1. Proses semua node yang sebelumnya dihapus.
+      // 1. Simpan node baru terlebih dahulu agar mendapatkan ID database.
+      const createdNodes = [];
+
+      for (const newNode of newNodes) {
+        const level = newNode.level;
+        let parentId = newNode._parentId;
+
+        // Jika parent juga merupakan node baru, gunakan ID database yang baru dibuat.
+        const createdParent = createdNodes.find((item) => item.tempId === parentId);
+        if (createdParent) {
+          parentId = createdParent.id;
+        } else if (typeof parentId === "string" && parentId.includes("-")) {
+          const parentParts = parentId.split("-");
+          const possibleId = Number(parentParts[parentParts.length - 1]);
+          if (Number.isInteger(possibleId)) parentId = possibleId;
+        }
+
+        if (!parentId) {
+          throw new Error(`Parent ${level} tidak ditemukan.`);
+        }
+
+        const createResponse = await fetch(
+          "http://localhost:8000/api/pohon-kinerja/node",
+          {
+            method: "POST",
+            headers: {
+              Accept: "application/json",
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify({
+              level,
+              parent_id: parentId,
+              title: newNode.title || "",
+              indicator: newNode.indicator || "",
+            }),
+          }
+        );
+
+        const createData = await createResponse.json();
+        if (!createResponse.ok) {
+          throw new Error(createData.message || `Gagal menambahkan ${level}`);
+        }
+
+        createdNodes.push({
+          tempId: newNode.id,
+          id: createData.data.id,
+          level,
+        });
+      }
+
+      // Ganti temporary ID dengan ID database supaya edit/hapus berikutnya normal.
+      if (createdNodes.length > 0) {
+        setTree((current) => {
+          const replaceIds = (node) => {
+            const created = createdNodes.find((item) => item.tempId === node.id);
+            return {
+              ...node,
+              ...(created ? { id: `${created.level.toLowerCase()}-${created.id}` } : {}),
+              ...(node.children ? { children: node.children.map(replaceIds) } : {}),
+            };
+          };
+          return { ...current, branches: current.branches.map(replaceIds) };
+        });
+
+        setSelected((current) => {
+          const created = createdNodes.find((item) => item.tempId === current.id);
+          return created
+            ? { ...current, id: `${created.level.toLowerCase()}-${created.id}` }
+            : current;
+        });
+      }
+
+      // 2. Proses semua node lama yang dihapus.
       for (const deletedNode of deletedNodes) {
         const [deleteLevel, deleteIdString] = deletedNode.id.split("-");
         const deleteId = Number(deleteIdString);
@@ -302,75 +509,228 @@ function EditablePohonKinerja() {
 
         const deleteResponse = await fetch(
           `http://localhost:8000/api/pohon-kinerja/node/${deleteLevel}/${deleteId}`,
-          {
-            method: "DELETE",
-            headers: {
-              Accept: "application/json",
-            },
-          }
+          { method: "DELETE", headers: { Accept: "application/json" } }
         );
 
         const deleteData = await deleteResponse.json();
-
         if (!deleteResponse.ok) {
-          throw new Error(
-            deleteData.message || `Gagal menghapus ${deletedNode.level}`
-          );
+          throw new Error(deleteData.message || `Gagal menghapus ${deletedNode.level}`);
         }
       }
 
-      // Setelah semua penghapusan berhasil, kosongkan antrean hapus.
-      setDeletedNodes([]);
+      // 3. Update node yang sedang dipilih jika node tersebut berasal dari database.
+      const selectedIsNew = selected.id.startsWith("node-");
+      if (!selectedIsNew && selected.id) {
+        const [level, idString] = selected.id.split("-");
+        const id = Number(idString);
 
-      // Jika tidak ada node yang sedang dipilih untuk di-update,
-      // cukup simpan state lokal setelah proses delete selesai.
-      if (
-        !pohonKinerjaData ||
-        !selected.id ||
-        selected.id.startsWith("node-")
-      ) {
-        localStorage.setItem(STORAGE_KEY, JSON.stringify(tree));
-        setSaved(true);
-        setErrorData("");
+        if (!Number.isInteger(id)) {
+          throw new Error("ID node tidak valid.");
+        }
+
+        const response = await fetch(
+          `http://localhost:8000/api/pohon-kinerja/node/${level}/${id}`,
+          {
+            method: "PUT",
+            headers: {
+              Accept: "application/json",
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify({
+              title: selected.title || "",
+              indicator: selected.indicator || "",
+            }),
+          }
+        );
+
+        const data = await response.json();
+        if (!response.ok) {
+          throw new Error(data.message || "Gagal menyimpan perubahan");
+        }
+      }
+
+      setNewNodes([]);
+      setDeletedNodes([]);
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(tree));
+      setSaved(true);
+      setErrorData("");
+
+      // Ambil ulang dari database agar state benar-benar sinkron.
+      const refresh = await fetch(
+        `http://localhost:8000/api/pohon-kinerja/tree?tahun=${encodeURIComponent(tahun)}${unitKerja ? `&unit_kerja=${encodeURIComponent(unitKerja)}` : ""}`,
+        { headers: { Accept: "application/json" } }
+      );
+      const refreshData = await refresh.json();
+      if (refresh.ok) {
+        setTree(refreshData.data.tree);
+        setTreeData(refreshData.data.tree);
+        setPohonKinerjaData(refreshData.data);
+        setSelected({ ...refreshData.data.tree, level: "ULTIMATE" });
+      }
+    } catch (error) {
+      setSaved(false);
+      setErrorData(error.message || "Gagal menyimpan perubahan");
+    }
+  };
+  const handleArchive = async () => {
+    if (!pohonKinerjaData) {
+      setErrorData("Tidak ada data pohon kinerja yang akan diarsipkan");
+      return;
+    }
+
+    const tahunLama = Number(pohonKinerjaData.tahun);
+    const tahunBaru = tahunLama + 1;
+    const unitKerjaLama = pohonKinerjaData.unit_kerja || unitKerja || "DINAS KOMUNIKASI DAN INFORMATIKA";
+
+    setArchivingId(pohonKinerjaData.pohon_kinerja_id);
+    try {
+      const response = await fetch(
+        `http://localhost:8000/api/pohon-kinerja/archive/${pohonKinerjaData.pohon_kinerja_id}`,
+        { method: "POST", headers: { Accept: "application/json" } }
+      );
+
+      const data = await response.json();
+      if (!response.ok) {
+        setErrorData(data.message || "Gagal mengarsipkan pohon kinerja");
         return;
       }
 
-      const [level, idString] = selected.id.split("-");
-      const id = Number(idString);
+      setShowArchiveModal(false);
+      setErrorData("");
+      setLastAvailableYear(tahunLama);
+      setNewYearForm({ tahun: tahunBaru, unit_kerja: unitKerjaLama });
 
-      if (!Number.isInteger(id)) {
-        throw new Error("ID node tidak valid.");
+      // Tahun baru langsung dipilih, tetapi belum dibuat. Canvas menampilkan tombol
+      // "Tambah Pohon Kinerja Baru" dengan tahun sebelumnya sebagai template.
+      setTahun(String(tahunBaru));
+      setUnitKerja("");
+      setPohonKinerjaData(null);
+      setTreeData(null);
+      setTree(initialTree);
+      setSelected({ ...initialTree, id: "ultimate", level: "ULTIMATE" });
+      setNewNodes([]);
+      setDeletedNodes([]);
+      setSaved(false);
+
+      setAvailableYears((current) => {
+        const years = [...new Set(current.map(Number))];
+        return years.sort((a, b) => b - a);
+      });
+
+      await fetchArchivedData();
+    } catch (error) {
+      setErrorData(error.message || "Gagal mengarsipkan pohon kinerja");
+    } finally {
+      setArchivingId(null);
+    }
+  };
+  const fetchArchivedData = async () => {
+    setLoadingArchived(true);
+    try {
+      const response = await fetch('http://localhost:8000/api/pohon-kinerja/archived', {
+        method: 'GET',
+        headers: {
+          Accept: 'application/json',
+        },
+      });
+
+      const data = await response.json();
+
+      if (response.ok) {
+        setArchivedData(data.data || []);
+      } else {
+        setArchivedData([]);
       }
+    } catch (err) {
+      console.error('Failed to fetch archived data:', err);
+      setArchivedData([]);
+    } finally {
+      setLoadingArchived(false);
+    }
+  };
 
+  const handleRestore = async (id) => {
+    setArchivingId(id);
+    try {
       const response = await fetch(
-        `http://localhost:8000/api/pohon-kinerja/node/${level}/${id}`,
+        `http://localhost:8000/api/pohon-kinerja/restore/${id}`,
         {
-          method: "PUT",
+          method: "POST",
           headers: {
             Accept: "application/json",
-            "Content-Type": "application/json",
           },
-          body: JSON.stringify({
-            title: selected.title || "",
-            indicator: selected.indicator || "",
-          }),
         }
       );
 
       const data = await response.json();
 
       if (!response.ok) {
-        throw new Error(
-          data.message || "Gagal menyimpan perubahan"
-        );
+        setErrorData(data.message || "Gagal memulihkan pohon kinerja");
+        setArchivingId(null);
+        return;
       }
 
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(tree));
-      setSaved(true);
       setErrorData("");
+      // Refresh archived list
+      await fetchArchivedData();
     } catch (error) {
+      setErrorData(error.message || "Gagal memulihkan pohon kinerja");
+    } finally {
+      setArchivingId(null);
+    }
+  };
+
+  const handleCreateNewYear = async () => {
+    if (!newYearForm.tahun || !newYearForm.unit_kerja) {
+      setErrorData("Tahun dan Unit Kerja harus diisi");
+      return;
+    }
+
+    setCreatingNewYear(true);
+    setErrorData("");
+
+    try {
+      const response = await fetch(
+        "http://localhost:8000/api/pohon-kinerja/duplicate",
+        {
+          method: "POST",
+          headers: {
+            Accept: "application/json",
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            tahun_baru: Number(newYearForm.tahun),
+            unit_kerja: newYearForm.unit_kerja,
+          }),
+        }
+      );
+
+      const data = await response.json();
+      if (!response.ok) {
+        throw new Error(data.message || "Gagal membuat pohon kinerja tahun baru");
+      }
+
+      setShowCreateNewModal(false);
+      setAvailableYears((prev) =>
+        [...new Set([...prev.map(Number), Number(newYearForm.tahun)])].sort((a, b) => b - a)
+      );
+      setUnitKerja(newYearForm.unit_kerja);
+      setTahun(String(newYearForm.tahun));
+      setNewNodes([]);
+      setDeletedNodes([]);
       setSaved(false);
-      setErrorData(error.message || "Gagal menyimpan perubahan");
+
+      // Jika endpoint duplicate mengembalikan tree, tampilkan langsung tanpa menunggu fetch berikutnya.
+      if (data.data?.tree) {
+        setTree(data.data.tree);
+        setTreeData(data.data.tree);
+        setPohonKinerjaData(data.data);
+        setSelected({ ...data.data.tree, level: "ULTIMATE" });
+      }
+    } catch (error) {
+      setErrorData(error.message || "Gagal membuat pohon kinerja tahun baru");
+    } finally {
+      setCreatingNewYear(false);
     }
   };
 
@@ -439,6 +799,35 @@ function EditablePohonKinerja() {
     Tambah Intermediate
   </button>
 
+  {pohonKinerjaData && (
+    <button
+      type="button"
+      onClick={() => setShowArchiveModal(true)}
+      className="flex items-center gap-2 rounded border border-orange-600 px-4 py-2 text-orange-600 hover:bg-orange-50"
+    >
+      <span className="material-symbols-outlined text-[18px]">
+        archive
+      </span>
+      Arsipkan Tahun
+    </button>
+  )}
+
+  <button
+    type="button"
+    onClick={() => {
+      setShowArchivedList(true);
+      if (archivedData.length === 0) {
+        fetchArchivedData();
+      }
+    }}
+    className="flex items-center gap-2 rounded border border-purple-600 px-4 py-2 text-purple-600 hover:bg-purple-50"
+  >
+    <span className="material-symbols-outlined text-[18px]">
+      history
+    </span>
+    Lihat Arsipan
+  </button>
+
 </div>
       <div className="mb-8 rounded-lg border border-slate-300 bg-white p-6 shadow-sm"><div className="grid grid-cols-1 gap-4 md:grid-cols-4">
         <div className="flex flex-col gap-1">
@@ -448,12 +837,21 @@ function EditablePohonKinerja() {
           <select 
             value={tahun} 
             onChange={(e) => setTahun(e.target.value)}
-            className="w-full p-2 rounded border border-slate-300 bg-white focus:border-blue-950 focus:ring-2 focus:ring-blue-950/20 outline-none text-sm"
+            disabled={loadingYears}
+            className="w-full p-2 rounded border border-slate-300 bg-white focus:border-blue-950 focus:ring-2 focus:ring-blue-950/20 outline-none text-sm disabled:bg-slate-100 disabled:cursor-not-allowed"
           >
             <option value="">Pilih Tahun</option>
-            <option value="2026">2026</option>
-            <option value="2025">2025</option>
-            <option value="2024">2024</option>
+            {loadingYears ? (
+              <option disabled>Memuat tahun...</option>
+            ) : availableYears.length > 0 ? (
+              availableYears.map((year) => (
+                <option key={year} value={String(year)}>
+                  {year}
+                </option>
+              ))
+            ) : (
+              <option disabled>Tidak ada data tahun</option>
+            )}
           </select>
         </div>
         
@@ -490,8 +888,156 @@ function EditablePohonKinerja() {
         className="w-full min-w-0 overflow-auto rounded-xl border border-slate-300 bg-[#f7fbff] shadow-sm"
       >
         <div className="min-w-max p-4 md:p-5">
+          {/* Tampilkan button "Tambah Pohon Kinerja Baru" ketika tahun tidak memiliki data */}
+          {!pohonKinerjaData && lastAvailableYear && (
+            <div className="mb-8 flex flex-col items-center justify-center py-12">
+              <span className="material-symbols-outlined text-6xl text-slate-300 mb-4">
+                folder_open
+              </span>
+              <h2 className="text-2xl font-bold text-slate-700 mb-2">Pohon Kinerja Tahun {tahun}</h2>
+              <p className="text-slate-500 mb-6 max-w-md text-center">
+                Tahun {tahun} belum memiliki data Pohon Kinerja. Klik tombol di bawah untuk membuat Pohon Kinerja baru dengan template dari tahun {lastAvailableYear}.
+              </p>
+              <button
+                type="button"
+                onClick={() => {
+                  setNewYearForm({
+                    tahun: parseInt(tahun),
+                    unit_kerja: "DINAS KOMUNIKASI DAN INFORMATIKA",
+                  });
+                  setShowCreateNewModal(true);
+                }}
+                className="flex items-center gap-3 rounded-lg bg-blue-600 px-8 py-4 font-semibold text-white shadow-lg hover:bg-blue-700 transition"
+              >
+                <span className="material-symbols-outlined text-[24px]">
+                  add_circle
+                </span>
+                Tambah Pohon Kinerja Baru
+              </button>
+            </div>
+          )}
+
+          {/* Tampilkan tree jika data ada */}
+          {pohonKinerjaData && (
           <div className="grid gap-6 xl:grid-cols-[minmax(0,1fr)_300px] w-max min-w-full">
-            <section className="w-full min-w-0"><div className="min-w-max px-8 pb-20 pt-8"><div className="mx-auto mb-8 flex w-72 flex-col items-center rounded-lg border-2 border-emerald-400 bg-white p-4 text-center shadow-sm"><div className="mb-1 font-bold text-emerald-600">POHON KINERJA</div><div className="text-xs font-bold">{pohonKinerjaData?.unit_kerja || "DINAS KOMUNIKASI DAN INFORMATIKA"}</div><div className="text-xs text-slate-500">TAHUN {pohonKinerjaData?.tahun || 2026}</div></div><div className="flex flex-col items-center"><TreeNode node={tree} level="ULTIMATE" selected={selected.id === "ultimate"} onSelect={setSelected} /><div className="h-8 w-px bg-slate-400" /></div><div className="relative flex min-w-max justify-center gap-8 pt-5 before:absolute before:left-0 before:right-0 before:top-0 before:h-px before:bg-slate-400">{tree.branches.map((branch) => <div key={branch.id} className="flex w-[250px] shrink-0 flex-col items-center"><div className="h-5 w-px shrink-0 bg-slate-400" /><TreeNode node={branch} level="INTERMEDIATE" selected={selected.id === branch.id} onSelect={setSelected} /><div className="my-5 h-5 w-px shrink-0 bg-slate-400" />{branch.children.length > 0 && <div className="flex w-full flex-col items-center gap-5">{branch.children.map((child) => <div key={child.id} className="flex w-full flex-col items-center"><TreeNode node={child} level="IMMEDIATE" selected={selected.id === child.id} onSelect={setSelected} />{child.children?.length > 0 && <div className="mt-5 flex w-full flex-col items-center gap-5 border-t border-slate-400 pt-5">{child.children.map((output) => <div key={output.id} className="relative flex w-full flex-col items-center before:absolute before:-top-5 before:h-5 before:border-l before:border-slate-400"><TreeNode node={output} level="OUTPUT" selected={selected.id === output.id} onSelect={setSelected} /></div>)}</div>}</div>)}</div>}<button type="button" onClick={() => addImmediate(branch)} className="mt-5 mb-4 flex print:hidden items-center gap-1 text-xs font-bold text-blue-700 hover:text-blue-950"><span className="material-symbols-outlined text-[16px]">add_circle</span>Tambah Immediate</button></div>)}</div></div></section>
+            <section className="w-full min-w-0">
+              <div className="min-w-max px-8 pb-20 pt-8">
+                {/* Header Pohon Kinerja */}
+                <div className="mx-auto mb-8 flex w-72 flex-col items-center rounded-lg border-2 border-emerald-400 bg-white p-4 text-center shadow-sm">
+                  <div className="mb-1 font-bold text-emerald-600">
+                    POHON KINERJA
+                  </div>
+                  <div className="text-xs font-bold">
+                    {pohonKinerjaData?.unit_kerja ||
+                      "DINAS KOMUNIKASI DAN INFORMATIKA"}
+                  </div>
+                  <div className="text-xs text-slate-500">
+                    TAHUN {pohonKinerjaData?.tahun || 2026}
+                  </div>
+                </div>
+
+                {/* Ultimate */}
+                <div className="flex flex-col items-center">
+                  <TreeNode
+                    node={tree}
+                    level="ULTIMATE"
+                    selected={selected.id === "ultimate"}
+                    onSelect={setSelected}
+                  />
+                  <div className="h-8 w-px bg-slate-400" />
+                </div>
+
+                {/* Intermediate */}
+                <div className="relative flex min-w-max justify-center gap-8 pt-5 before:absolute before:left-0 before:right-0 before:top-0 before:h-px before:bg-slate-400">
+                  {tree.branches.map((branch) => (
+                    <div
+                      key={branch.id}
+                      className="flex w-[250px] shrink-0 flex-col items-center"
+                    >
+                      <div className="h-5 w-px shrink-0 bg-slate-400" />
+
+                      {/* Intermediate Node */}
+                      <TreeNode
+                        node={branch}
+                        level="INTERMEDIATE"
+                        selected={selected.id === branch.id}
+                        onSelect={setSelected}
+                      />
+
+                      <div className="my-5 h-5 w-px shrink-0 bg-slate-400" />
+
+                      {/* Immediate */}
+                      {branch.children?.length > 0 && (
+                        <div className="flex w-full flex-col items-center gap-5">
+                          {branch.children.map((child) => (
+                            <div
+                              key={child.id}
+                              className="flex w-full flex-col items-center"
+                            >
+                              {/* Immediate Node */}
+                              <TreeNode
+                                node={child}
+                                level="IMMEDIATE"
+                                selected={selected.id === child.id}
+                                onSelect={setSelected}
+                              />
+
+                              {/* Output */}
+                              {child.children?.length > 0 && (
+                                <div className="mt-5 flex w-full flex-col items-center gap-5 border-t border-slate-400 pt-5">
+                                  {child.children.map((output) => (
+                                    <div
+                                      key={output.id}
+                                      className="relative flex w-full flex-col items-center before:absolute before:-top-5 before:h-5 before:border-l before:border-slate-400"
+                                    >
+                                      <TreeNode
+                                        node={output}
+                                        level="OUTPUT"
+                                        selected={selected.id === output.id}
+                                        onSelect={setSelected}
+                                      />
+                                    </div>
+                                  ))}
+                                </div>
+                              )}
+
+                              {/* Tambah Output untuk Immediate ini */}
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  addNode({
+                                    ...child,
+                                    level: "IMMEDIATE",
+                                  })
+                                }
+                                className="mb-3 mt-3 flex print:hidden items-center gap-1 text-xs font-bold text-amber-700 hover:text-amber-900"
+                              >
+                                <span className="material-symbols-outlined text-[16px]">
+                                  add_circle
+                                </span>
+                                Tambah Output
+                              </button>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+
+                      {/* Tambah Immediate untuk Intermediate ini */}
+                      <button
+                        type="button"
+                        onClick={() => addImmediate(branch)}
+                        className="mt-5 mb-4 flex print:hidden items-center gap-1 text-xs font-bold text-blue-700 hover:text-blue-950"
+                      >
+                        <span className="material-symbols-outlined text-[16px]">
+                          add_circle
+                        </span>
+                        Tambah Immediate
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </section>
           <aside className="h-fit rounded-lg border border-slate-300 bg-white p-5 shadow-sm print:hidden">
           {false && pohonKinerjaData ? (
             <>
@@ -538,10 +1084,177 @@ function EditablePohonKinerja() {
           )}
           </aside>
           </div>
+          )}
         </div>
       </div>
     </main>
     {showUpload && <UploadModal onClose={() => setShowUpload(false)} onUploadSuccess={(tahunBaru) => { setShowUpload(false); setTahun(tahunBaru); }} />}
+
+    {showArchiveModal && (
+      <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
+        <div className="w-full max-w-md rounded-lg bg-white p-6 shadow-lg">
+          <h2 className="text-lg font-bold text-slate-900 mb-4">Konfirmasi Pengarsipan</h2>
+          <p className="text-slate-600 mb-2">
+            Apakah Anda yakin ingin mengarsipkan Pohon Kinerja tahun <strong>{pohonKinerjaData?.tahun}</strong>?
+          </p>
+          <p className="text-sm text-slate-500 mb-6">
+            Data yang diarsipkan dapat dilihat di menu "Lihat Arsipan" dan dapat dipulihkan kapan saja.
+          </p>
+          <div className="flex gap-3">
+            <button
+              type="button"
+              onClick={() => setShowArchiveModal(false)}
+              disabled={archivingId !== null}
+              className="flex-1 rounded border border-slate-300 px-4 py-2 font-semibold text-slate-600 hover:bg-slate-50 disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              Batal
+            </button>
+            <button
+              type="button"
+              onClick={handleArchive}
+              disabled={archivingId !== null}
+              className="flex-1 rounded bg-orange-600 px-4 py-2 font-semibold text-white hover:bg-orange-700 disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              {archivingId !== null ? "Memproses..." : "Arsipkan"}
+            </button>
+          </div>
+        </div>
+      </div>
+    )}
+
+    {showArchivedList && (
+      <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+        <div className="w-full max-w-2xl rounded-lg bg-white shadow-lg max-h-[90vh] overflow-y-auto">
+          <div className="sticky top-0 border-b border-slate-200 bg-white p-6">
+            <div className="flex items-center justify-between">
+              <h2 className="text-lg font-bold text-slate-900">Data Arsipan Pohon Kinerja</h2>
+              <button
+                type="button"
+                onClick={() => setShowArchivedList(false)}
+                className="text-slate-400 hover:text-slate-600"
+              >
+                <span className="material-symbols-outlined">close</span>
+              </button>
+            </div>
+          </div>
+
+          <div className="p-6">
+            {loadingArchived ? (
+              <div className="flex items-center justify-center gap-3 py-8">
+                <span className="material-symbols-outlined animate-spin text-blue-600">
+                  autorenew
+                </span>
+                <p className="text-slate-600">Memuat data arsipan...</p>
+              </div>
+            ) : archivedData.length === 0 ? (
+              <div className="py-8 text-center">
+                <span className="material-symbols-outlined text-4xl text-slate-300 block mb-2">
+                  folder_open
+                </span>
+                <p className="text-slate-500">Tidak ada data arsipan</p>
+              </div>
+            ) : (
+              <div className="space-y-4">
+                {archivedData.map((item) => (
+                  <div key={item.id} className="flex items-start justify-between rounded-lg border border-slate-200 p-4">
+                    <div className="flex-1">
+                      <h3 className="font-semibold text-slate-900">Tahun {item.tahun}</h3>
+                      <p className="text-sm text-slate-600">{item.unit_kerja}</p>
+                      <div className="mt-2 flex gap-4 text-sm text-slate-500">
+                        <span>Ultimate: {item.total_ultimate}</span>
+                        <span>Intermediate: {item.total_intermediate}</span>
+                        <span>Immediate: {item.total_immediate}</span>
+                        <span>Output: {item.total_output}</span>
+                      </div>
+                      <p className="mt-2 text-xs text-slate-400">
+                        Diarsipkan: {new Date(item.archived_at).toLocaleString('id-ID')}
+                      </p>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => handleRestore(item.id)}
+                      disabled={archivingId !== null}
+                      className="ml-4 flex items-center gap-2 rounded bg-blue-600 px-4 py-2 text-sm font-semibold text-white hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed whitespace-nowrap"
+                    >
+                      <span className="material-symbols-outlined text-[18px]">
+                        restore
+                      </span>
+                      {archivingId === item.id ? "Memproses..." : "Pulihkan"}
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+    )}
+
+    {showCreateNewModal && (
+      <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+        <div className="w-full max-w-md rounded-xl bg-white shadow-2xl">
+          <div className="border-b border-slate-200 p-6">
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="text-xs font-bold uppercase tracking-widest text-blue-700">Pohon Kinerja</p>
+                <h2 className="mt-1 text-xl font-bold text-slate-900">Tambah Tahun Baru</h2>
+              </div>
+              <button type="button" onClick={() => setShowCreateNewModal(false)} className="text-slate-400 hover:text-red-600">
+                <span className="material-symbols-outlined">close</span>
+              </button>
+            </div>
+          </div>
+
+          <div className="space-y-4 p-6">
+            <div className="rounded-lg border border-blue-200 bg-blue-50 p-4 text-sm text-blue-900">
+              Struktur tahun <strong>{lastAvailableYear || "sebelumnya"}</strong> akan disalin menjadi Pohon Kinerja tahun <strong>{newYearForm.tahun}</strong>.
+              Setelah dibuat, hasil salinan langsung dapat diedit, ditambah, dan dihapus.
+            </div>
+
+            <label className="flex flex-col gap-1 text-xs font-semibold uppercase tracking-wider text-slate-500">
+              Tahun
+              <input
+                type="number"
+                value={newYearForm.tahun}
+                onChange={(e) => setNewYearForm((prev) => ({ ...prev, tahun: e.target.value }))}
+                className="rounded border border-slate-300 p-2 text-sm font-normal normal-case tracking-normal text-slate-700"
+                disabled={creatingNewYear}
+              />
+            </label>
+
+            <label className="flex flex-col gap-1 text-xs font-semibold uppercase tracking-wider text-slate-500">
+              Unit Kerja
+              <input
+                type="text"
+                value={newYearForm.unit_kerja}
+                onChange={(e) => setNewYearForm((prev) => ({ ...prev, unit_kerja: e.target.value }))}
+                className="rounded border border-slate-300 p-2 text-sm font-normal normal-case tracking-normal text-slate-700"
+                disabled={creatingNewYear}
+              />
+            </label>
+          </div>
+
+          <div className="flex gap-3 border-t border-slate-200 bg-slate-50 p-6">
+            <button
+              type="button"
+              onClick={() => setShowCreateNewModal(false)}
+              disabled={creatingNewYear}
+              className="flex-1 rounded border border-slate-300 px-4 py-2 font-semibold text-slate-600 hover:bg-white disabled:opacity-50"
+            >
+              Batal
+            </button>
+            <button
+              type="button"
+              onClick={handleCreateNewYear}
+              disabled={creatingNewYear}
+              className="flex-1 rounded bg-blue-600 px-4 py-2 font-semibold text-white hover:bg-blue-700 disabled:opacity-50"
+            >
+              {creatingNewYear ? "Membuat..." : "Buat & Salin Pohon"}
+            </button>
+          </div>
+        </div>
+      </div>
+    )}
   </>;
 }
 
