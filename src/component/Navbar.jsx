@@ -1,4 +1,8 @@
+import { useAuth } from "../context/AuthContext";
+
 function Navbar() {
+  const { user } = useAuth();
+
   return (
     <header className="h-16 bg-white border-b border-outline-variant shadow-sm sticky top-0 z-20 flex items-center justify-between px-4 md:px-8">
 
@@ -56,7 +60,7 @@ function Navbar() {
           <div className="hidden md:block">
 
             <p className="text-xs font-bold text-primary">
-              Admin
+              {user?.name || "Admin"}
             </p>
 
           </div>
