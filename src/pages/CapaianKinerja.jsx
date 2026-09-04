@@ -69,7 +69,19 @@ export default function CapaianKinerja() {
       }
     } catch (err) {
       console.error("Gagal mengambil data capaian:", err);
-      setError("Gagal memuat data capaian kinerja. Pastikan server backend aktif.");
+      if (err.response) {
+        if (err.response.status === 401) {
+          setError("Sesi login berakhir atau token belum ada. Silakan Logout lalu Login kembali.");
+        } else if (err.response.status === 404) {
+          setError("Endpoint API tidak ditemukan (404). Pastikan backend sudah berada di branch 'varrel' dan di-pull.");
+        } else if (err.response.status === 500) {
+          setError("Kesalahan database/server (500). Pastikan sudah menjalankan 'php artisan migrate' di folder backend.");
+        } else {
+          setError(err.response.data?.message || `Gagal memuat data (HTTP ${err.response.status}).`);
+        }
+      } else {
+        setError("Gagal terhubung ke backend. Pastikan server backend sudah dijalankan ('php artisan serve' di port 8000).");
+      }
     } finally {
       setLoading(false);
     }
