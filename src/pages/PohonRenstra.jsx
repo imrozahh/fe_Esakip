@@ -710,7 +710,7 @@ function FormModal({ data, level, saving, onClose, onSave }) {
    TABLE — 4 kolom, 1 baris per Output
 ========================================================= */
 
-function RenstraTable({ data, onDetail }) {
+function RenstraTable({ data, archived, onDetail }) {
   return (
     <div className="w-full overflow-hidden rounded-lg border border-slate-300 bg-white shadow-sm">
       <table className="w-full table-fixed border-collapse">
@@ -732,7 +732,24 @@ function RenstraTable({ data, onDetail }) {
         </thead>
 
         <tbody>
-          {data.length === 0 && (
+          {archived && (
+            <tr>
+              <td colSpan={4} className="px-6 py-12 text-center">
+                <span className="material-symbols-outlined mb-2 block text-4xl text-amber-400">
+                  archive
+                </span>
+                <p className="text-sm font-semibold text-amber-700">
+                  Data sudah diarsipkan
+                </p>
+                <p className="mt-1 text-xs text-slate-500">
+                  Pohon kinerja untuk tahun ini sudah diarsipkan dan tidak
+                  ditampilkan di Rencana Strategis.
+                </p>
+              </td>
+            </tr>
+          )}
+
+          {!archived && data.length === 0 && (
             <tr>
               <td colSpan={4} className="px-6 py-12 text-center">
                 <span className="material-symbols-outlined mb-2 block text-4xl text-slate-300">
@@ -743,7 +760,8 @@ function RenstraTable({ data, onDetail }) {
             </tr>
           )}
 
-          {data.map((renstra) => {
+          {!archived &&
+            data.map((renstra) => {
             const ultimate = renstra.ultimateOutcome;
             const ultimateRows = countUltimateRows(renstra);
             let ultimateRendered = false;
@@ -866,6 +884,7 @@ function PohonRenstra() {
   const [detail, setDetail] = useState(null);
   const [editData, setEditData] = useState(null);
   const [saving, setSaving] = useState(false);
+  const [isArchived, setIsArchived] = useState(false);
 
   // Available years state
   const [availableYears, setAvailableYears] = useState([]);
@@ -911,6 +930,16 @@ function PohonRenstra() {
 
         const result = await response.json();
 
+        // Tahun ini sudah diarsipkan — backend balikin status 200
+        // dengan flag archived: true dan data kosong.
+        if (result.archived) {
+          setIsArchived(true);
+          setData([]);
+          return;
+        }
+
+        setIsArchived(false);
+
         if (!response.ok) {
           setData([]);
           return;
@@ -936,6 +965,7 @@ function PohonRenstra() {
         setData(formattedData);
       } catch (error) {
         console.error("Gagal mengambil data Renstra:", error);
+        setIsArchived(false);
         setData([]);
       }
     };
@@ -1191,23 +1221,39 @@ function PohonRenstra() {
         </div>
 
         {/* INFO */}
-        <div className="mb-5 rounded-lg border border-blue-100 bg-blue-50 px-4 py-3">
-          <div className="flex items-start gap-3">
-            <span className="material-symbols-outlined text-blue-700">info</span>
-            <div>
-              <p className="text-sm font-semibold text-blue-900">Struktur Rencana Strategis</p>
-              <p className="mt-1 text-xs leading-relaxed text-blue-700">
-                Struktur Ultimate, Intermediate, Immediate, dan Output berasal dari Pohon
-                Kinerja dan tidak bisa ditambah/dihapus dari sini. Klik <b>Lihat Detail</b>{" "}
-                lalu <b>Edit</b> untuk mengisi atau melengkapi konten (indikator, target,
-                sasaran, program, kegiatan, output/input, dan sub kegiatan).
-              </p>
+        {isArchived ? (
+          <div className="mb-5 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3">
+            <div className="flex items-start gap-3">
+              <span className="material-symbols-outlined text-amber-600">archive</span>
+              <div>
+                <p className="text-sm font-semibold text-amber-900">Data Sudah Diarsipkan</p>
+                <p className="mt-1 text-xs leading-relaxed text-amber-700">
+                  Pohon kinerja tahun {year} sudah diarsipkan di halaman Pohon Kinerja,
+                  sehingga tidak lagi ditampilkan di Rencana Strategis. Pilih tahun lain,
+                  atau pulihkan (restore) arsip tahun ini kalau masih perlu diakses.
+                </p>
+              </div>
             </div>
           </div>
-        </div>
+        ) : (
+          <div className="mb-5 rounded-lg border border-blue-100 bg-blue-50 px-4 py-3">
+            <div className="flex items-start gap-3">
+              <span className="material-symbols-outlined text-blue-700">info</span>
+              <div>
+                <p className="text-sm font-semibold text-blue-900">Struktur Rencana Strategis</p>
+                <p className="mt-1 text-xs leading-relaxed text-blue-700">
+                  Struktur Ultimate, Intermediate, Immediate, dan Output berasal dari Pohon
+                  Kinerja dan tidak bisa ditambah/dihapus dari sini. Klik <b>Lihat Detail</b>{" "}
+                  lalu <b>Edit</b> untuk mengisi atau melengkapi konten (indikator, target,
+                  sasaran, program, kegiatan, output/input, dan sub kegiatan).
+                </p>
+              </div>
+            </div>
+          </div>
+        )}
 
         {/* TABLE */}
-        <RenstraTable data={filteredData} onDetail={openDetail} />
+        <RenstraTable data={filteredData} archived={isArchived} onDetail={openDetail} />
       </main>
 
       {/* DETAIL MODAL */}
