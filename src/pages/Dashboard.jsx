@@ -237,6 +237,57 @@ export default function Dashboard() {
   }, [activeYear]);
 
   /* =======================================================
+     CAPAIAN KINERJA PER TRIWULAN — rata-rata persentase
+     capaian TW I-IV, ikut activeYear, auto-refresh juga.
+  ======================================================= */
+
+  const [quarters, setQuarters] = useState([]);
+  const [quartersStatus, setQuartersStatus] = useState("loading");
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function fetchQuarters() {
+      try {
+        const token = localStorage.getItem("e_sakip_token");
+
+        const response = await fetch(
+          `${API_BASE_URL}/api/capaian/quarterly-summary?tahun=${activeYear}`,
+          {
+            headers: token ? { Authorization: `Bearer ${token}` } : {},
+          }
+        );
+
+        if (!response.ok) {
+          throw new Error(`Request gagal dengan status ${response.status}`);
+        }
+
+        const json = await response.json();
+
+        if (!cancelled) {
+          setQuarters(json.data?.quarters ?? []);
+          setQuartersStatus("success");
+        }
+      } catch (error) {
+        if (!cancelled) {
+          console.error("Gagal mengambil capaian per triwulan:", error);
+          setQuartersStatus("error");
+        }
+      }
+    }
+
+    setQuartersStatus("loading");
+    fetchQuarters();
+
+    const intervalId = setInterval(fetchQuarters, AUTO_REFRESH_INTERVAL_MS);
+
+    return () => {
+      cancelled = true;
+      clearInterval(intervalId);
+    };
+  }, [activeYear]);
+
+  /* =======================================================
      STAT CARDS — Ultimate, Intermediate, Immediate, Output
   ======================================================= */
 
@@ -339,10 +390,10 @@ export default function Dashboard() {
           </div>
         </section>
 
-        {/* ================= DIAGRAM + RIGHT ================= */}
-        <section className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+        {/* ================= DUA DIAGRAM SEJAJAR ================= */}
+        <section className="grid grid-cols-1 lg:grid-cols-2 gap-6">
           {/* ================= DIAGRAM POHON KINERJA ================= */}
-          <div className="lg:col-span-2 bg-white border border-[#E2E8F0] rounded-xl shadow-sm">
+          <div className="bg-white border border-[#E2E8F0] rounded-xl shadow-sm">
             <div className="flex items-center justify-between p-4 border-b border-[#E2E8F0]">
               <div>
                 <h2 className="text-lg md:text-xl font-semibold text-[#0B1C30]">
@@ -434,13 +485,158 @@ export default function Dashboard() {
             </div>
           </div>
 
-          {/* ================= RIGHT COLUMN ================= */}
-          <div className="flex flex-col gap-6">
-            {/* Aksi Cepat */}
-            <div className="bg-white border border-[#E2E8F0] rounded-xl p-4 shadow-sm">
-              <h2 className="text-lg md:text-xl font-semibold text-[#0B1C30] mb-4">
-                Aksi Cepat
-              </h2>
+          {/* ================= CAPAIAN KINERJA PER TRIWULAN ================= */}
+          <div className="bg-white border border-[#E2E8F0] rounded-xl shadow-sm">
+            <div className="flex items-center justify-between p-4 border-b border-[#E2E8F0]">
+              <div>
+                <h2 className="text-lg md:text-xl font-semibold text-[#0B1C30]">
+                  Capaian Kinerja per Triwulan
+                </h2>
+                <p className="text-xs text-[#737780] mt-0.5">
+                  Rata-rata persentase capaian seluruh sasaran, tahun {activeYear}
+                </p>
+              </div>
+            </div>
+
+            <div className="p-5 md:p-6">
+              {quartersStatus === "loading" && (
+                <p className="text-sm text-[#737780] text-center py-10">
+                  Memuat data capaian...
+                </p>
+              )}
+
+              {quartersStatus === "error" && (
+                <p className="text-sm text-[#93000A] text-center py-10">
+                  Gagal memuat data capaian per triwulan.
+                </p>
+              )}
+
+              {quartersStatus === "success" && (
+                <>
+                  <div className="relative h-[220px] pl-8">
+                    {/* Gridline & label sumbu Y (0/25/50/75/100/125/150%) */}
+                    <div className="absolute inset-y-0 left-8 right-0">
+                      {[150, 125, 100, 75, 50, 25, 0].map((mark) => (
+                        <div
+                          key={mark}
+                          className="absolute left-0 right-0 flex items-center"
+                          style={{ bottom: `${(mark / 150) * 100}%` }}
+                        >
+                          <span className="absolute -left-8 -translate-y-1/2 text-[9px] text-[#A3A9B4] w-6 text-right">
+                            {mark}
+                          </span>
+                          <div
+                            className={`w-full border-t ${
+                              mark === 100
+                                ? "border-dashed border-[#94A3B8]"
+                                : "border-[#F1F5F9]"
+                            }`}
+                          />
+                        </div>
+                      ))}
+                    </div>
+
+                    {/* Bar per triwulan */}
+                    <div className="relative h-full flex items-end justify-around gap-3 md:gap-6 px-2">
+                      {quarters.map((quarter) => {
+                        const value = quarter.rata_rata_persentase;
+                        const filled = value !== null && value !== undefined;
+
+                        // Traffic-light: hijau (tercapai) / kuning (mendekati) / merah (kurang)
+                        const barColor = !filled
+                          ? "bg-[#E2E8F0]"
+                          : value >= 100
+                          ? "bg-emerald-500"
+                          : value >= 75
+                          ? "bg-amber-400"
+                          : "bg-red-400";
+
+                        const heightPercent = filled
+                          ? Math.min((value / 150) * 100, 100)
+                          : 3;
+
+                        return (
+                          <div
+                            key={quarter.periode}
+                            className="h-full flex flex-col items-center justify-end gap-1.5 flex-1 max-w-[80px]"
+                          >
+                            <span className="text-xs font-bold text-[#0B1C30]">
+                              {filled ? `${value}%` : "-"}
+                            </span>
+
+                            <div
+                              className={`w-full rounded-t-md transition-all ${barColor}`}
+                              style={{ height: `${heightPercent}%` }}
+                              title={
+                                filled
+                                  ? `${quarter.nama}: ${value}% (${quarter.jumlah_intermediate_terisi} sasaran terisi)`
+                                  : `${quarter.nama}: belum ada data`
+                              }
+                            />
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+
+                  {/* Label triwulan di bawah chart */}
+                  <div className="flex justify-around gap-3 md:gap-6 px-2 mt-2 pl-8">
+                    {quarters.map((quarter) => {
+                      const filled =
+                        quarter.rata_rata_persentase !== null &&
+                        quarter.rata_rata_persentase !== undefined;
+
+                      return (
+                        <div
+                          key={quarter.periode}
+                          className="text-center flex-1 max-w-[80px]"
+                        >
+                          <p className="text-xs font-semibold text-[#43474F]">
+                            {quarter.singkatan}
+                          </p>
+                          <p className="text-[10px] text-[#737780]">{quarter.rentang}</p>
+                          {!filled && (
+                            <p className="text-[9px] text-[#A3A9B4] italic">
+                              Belum diisi
+                            </p>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+
+                  {/* Legenda warna */}
+                  <div className="flex flex-wrap items-center justify-center gap-x-4 gap-y-1.5 mt-5 pt-4 border-t border-[#F1F5F9]">
+                    <div className="flex items-center gap-1.5">
+                      <span className="w-2.5 h-2.5 rounded-sm bg-emerald-500" />
+                      <span className="text-[10px] text-[#43474F]">Tercapai (&ge;100%)</span>
+                    </div>
+                    <div className="flex items-center gap-1.5">
+                      <span className="w-2.5 h-2.5 rounded-sm bg-amber-400" />
+                      <span className="text-[10px] text-[#43474F]">Mendekati (75-99%)</span>
+                    </div>
+                    <div className="flex items-center gap-1.5">
+                      <span className="w-2.5 h-2.5 rounded-sm bg-red-400" />
+                      <span className="text-[10px] text-[#43474F]">Kurang (&lt;75%)</span>
+                    </div>
+                    <div className="flex items-center gap-1.5">
+                      <span className="w-2.5 h-2.5 rounded-sm bg-[#E2E8F0]" />
+                      <span className="text-[10px] text-[#43474F]">Belum diisi</span>
+                    </div>
+                  </div>
+                </>
+              )}
+            </div>
+          </div>
+        </section>
+
+        {/* ================= AKSI CEPAT + AKTIVITAS TERBARU ================= */}
+        <section className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+          {/* Aksi Cepat */}
+          <div className="bg-white border border-[#E2E8F0] rounded-xl p-4 shadow-sm">
+            <h2 className="text-lg md:text-xl font-semibold text-[#0B1C30] mb-4">
+              Aksi Cepat
+            </h2>
 
               <div className="grid grid-cols-2 gap-2">
                 {/* NOTE: sesuaikan href di bawah ini dengan path routing
@@ -472,7 +668,7 @@ export default function Dashboard() {
             </div>
 
             {/* Aktivitas Terbaru */}
-            <div className="bg-white border border-[#E2E8F0] rounded-xl flex flex-col shadow-sm">
+            <div className="lg:col-span-2 bg-white border border-[#E2E8F0] rounded-xl flex flex-col shadow-sm">
               <div className="p-4 border-b border-[#E2E8F0]">
                 <h2 className="text-lg md:text-xl font-semibold text-[#0B1C30]">
                   Aktivitas Terbaru
@@ -539,7 +735,6 @@ export default function Dashboard() {
                   })}
               </div>
             </div>
-          </div>
         </section>
       </main>
 
