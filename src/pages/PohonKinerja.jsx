@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef, useLayoutEffect } from "react";
 
 const STORAGE_KEY = "esakip-pohon-kinerja";
 
@@ -99,12 +99,19 @@ function printNode(level, node) {
   return `<div class="node" style="border-color:${colors[0]};-webkit-print-color-adjust:exact;print-color-adjust:exact"><div class="head" style="background:${colors[1]};color:#fff;-webkit-print-color-adjust:exact;print-color-adjust:exact">${escapeHtml(node.title)}</div><div class="indicator">${escapeHtml(node.indicator || "Belum ada indikator")}</div></div>`;
 }
 
-function TreeNode({ node, level, selected, onSelect }) {
+function TreeNode({ node, level, selected, onSelect, domRef }) {
   const nodeLevel = node.level || level;
   const colors = palette[nodeLevel];
   return (
-    <button type="button" onClick={() => onSelect({ ...node, level: nodeLevel })} className={`group relative flex w-[250px] flex-col overflow-visible rounded-lg border-2 bg-white text-center shadow-sm transition hover:-translate-y-0.5 hover:shadow-md ${colors.border} ${selected ? "ring-4 ring-blue-100" : ""}`}>
-      <span className={`absolute -left-7 top-1/2 -translate-y-1/2 [writing-mode:vertical-rl] rotate-180 text-[9px] font-extrabold tracking-[0.18em] ${colors.label}`}>{nodeLevel}</span>
+    <button
+      type="button"
+      ref={domRef}
+      onClick={() => onSelect(node, nodeLevel)}
+      className={`group relative flex w-[250px] flex-col overflow-visible rounded-lg border-2 bg-white text-center shadow-sm transition hover:-translate-y-0.5 hover:shadow-md ${colors.border} ${selected ? "ring-4 ring-blue-100" : ""}`}
+    >
+      <span className={`absolute -left-7 top-1/2 -translate-y-1/2 [writing-mode:vertical-rl] rotate-180 whitespace-nowrap text-[9px] font-bold leading-none tracking-[0.14em] ${colors.label}`}>
+        {nodeLevel}
+      </span>
       <span className={`${colors.head} min-h-[48px] px-3 py-2 text-[10px] font-extrabold leading-tight text-white`}>{node.title}</span>
       <span className="min-h-[37px] border-t border-slate-200 px-3 py-2 text-[10px] leading-tight text-slate-600">{node.indicator || "Belum ada indikator"}</span>
       <span className="absolute -right-2 -top-2 hidden h-5 w-5 items-center justify-center rounded-full bg-blue-950 text-xs text-white group-hover:flex">✎</span>
@@ -112,15 +119,93 @@ function TreeNode({ node, level, selected, onSelect }) {
   );
 }
 
+// Menggambar garis panah langsung antar-node (ultimate -> intermediate -> immediate -> output)
+// berdasarkan posisi nyata tiap kotak, alih-alih garis bus/horizontal statis.
+function TreeConnectors({ containerRef, nodeRefs, edges }) {
+  const [lines, setLines] = useState([]);
+  const [size, setSize] = useState({ width: 0, height: 0 });
+
+  useLayoutEffect(() => {
+    const recompute = () => {
+      const container = containerRef.current;
+      if (!container) return;
+      const containerRect = container.getBoundingClientRect();
+      const nextLines = [];
+
+      edges.forEach(({ fromId, toId }) => {
+        const a = nodeRefs.current[fromId];
+        const b = nodeRefs.current[toId];
+        if (!a || !b) return;
+        const rectA = a.getBoundingClientRect();
+        const rectB = b.getBoundingClientRect();
+        nextLines.push({
+          key: `${fromId}=>${toId}`,
+          x1: rectA.left + rectA.width / 2 - containerRect.left,
+          y1: rectA.bottom - containerRect.top,
+          x2: rectB.left + rectB.width / 2 - containerRect.left,
+          y2: rectB.top - containerRect.top,
+        });
+      });
+
+      setLines(nextLines);
+      setSize({ width: container.scrollWidth, height: container.scrollHeight });
+    };
+
+    recompute();
+
+    const observer = new ResizeObserver(recompute);
+    if (containerRef.current) observer.observe(containerRef.current);
+    window.addEventListener("resize", recompute);
+
+    return () => {
+      observer.disconnect();
+      window.removeEventListener("resize", recompute);
+    };
+  }, [containerRef, nodeRefs, edges]);
+
+  return (
+    <svg
+      className="pointer-events-none absolute left-0 top-0"
+      width={size.width}
+      height={size.height}
+      style={{ overflow: "visible" }}
+    >
+      <defs>
+        <marker id="tree-arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+          <path d="M0,0 L10,5 L0,10 z" fill="#94a3b8" />
+        </marker>
+      </defs>
+      {lines.map((line) => (
+        <line
+          key={line.key}
+          x1={line.x1}
+          y1={line.y1}
+          x2={line.x2}
+          y2={line.y2}
+          stroke="#94a3b8"
+          strokeWidth="1.5"
+          markerEnd="url(#tree-arrow)"
+        />
+      ))}
+    </svg>
+  );
+}
+
 function EditablePohonKinerja() {
   const [tree, setTree] = useState(initialTree);
   const [selected, setSelected] = useState({ ...initialTree, id: "ultimate", level: "ULTIMATE" });
   const [showUpload, setShowUpload] = useState(false);
-  const [saved, setSaved] = useState(false);
+  const [showActionMenu, setShowActionMenu] = useState(false);
 
-  // Menyimpan node yang dihapus sampai tombol Simpan Perubahan ditekan
-  const [deletedNodes, setDeletedNodes] = useState([]);
-  const [newNodes, setNewNodes] = useState([]);
+  // Modal edit node (setiap perubahan langsung tersimpan ke server, tanpa tombol Simpan Perubahan)
+  const [showEditModal, setShowEditModal] = useState(false);
+  const [editForm, setEditForm] = useState({ title: "", indicator: "", level: "ULTIMATE" });
+  const [savingNode, setSavingNode] = useState(false);
+  const [addingNode, setAddingNode] = useState(false);
+
+  // Konfirmasi hapus node
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
+  const [deletingNode, setDeletingNode] = useState(false);
 
   // Filter states
   const [tahun, setTahun] = useState("2026");
@@ -151,6 +236,26 @@ function EditablePohonKinerja() {
     unit_kerja: "DINAS KOMUNIKASI DAN INFORMATIKA",
   });
   const [lastAvailableYear, setLastAvailableYear] = useState(null);
+
+  // Referensi untuk menggambar garis panah langsung antar-node
+  const treeSectionRef = useRef(null);
+  const nodeRefs = useRef({});
+  const registerNodeRef = (id) => (el) => {
+    if (el) nodeRefs.current[id] = el;
+    else delete nodeRefs.current[id];
+  };
+
+  const ultimateId = tree.id || "ultimate";
+  const edges = [];
+  tree.branches.forEach((branch) => {
+    edges.push({ fromId: ultimateId, toId: branch.id });
+    (branch.children || []).forEach((child) => {
+      edges.push({ fromId: branch.id, toId: child.id });
+      (child.children || []).forEach((output) => {
+        edges.push({ fromId: child.id, toId: output.id });
+      });
+    });
+  });
 
   // Fetch available years on component load
   useEffect(() => {
@@ -255,29 +360,67 @@ function EditablePohonKinerja() {
     fetchTreeData();
   }, [tahun, unitKerja]);
 
-  const updateSelected = (field, value) => {
-    setSaved(false);
-    const updateNode = (node) => ({
-      ...node,
-      ...(node.id === selected.id ? { [field]: value } : {}),
-      ...(node.children ? { children: node.children.map(updateNode) } : {}),
-    });
-    setTree((current) => selected.level === "ULTIMATE"
-      ? { ...current, [field]: value }
-      : { ...current, branches: current.branches.map(updateNode) });
-    setSelected((current) => ({ ...current, [field]: value }));
-
-    // Jika node masih baru dan belum masuk database, ikut perbarui antrean POST.
-    if (selected.id?.startsWith("node-")) {
-      setNewNodes((current) =>
-        current.map((node) =>
-          node.id === selected.id ? { ...node, [field]: value } : node
-        )
-      );
-    }
+  // --- Helper murni untuk mengubah struktur tree secara lokal ---
+  const patchNodeInTree = (root, id, patch) => {
+    if (id === (root.id || "ultimate")) return { ...root, ...patch };
+    const applyToChildren = (node) => {
+      if (node.id === id) return { ...node, ...patch };
+      if (!node.children) return node;
+      return { ...node, children: node.children.map(applyToChildren) };
+    };
+    return { ...root, branches: root.branches.map(applyToChildren) };
   };
 
-  const addNode = (target = selected) => {
+  const removeNodeFromTree = (root, id) => ({
+    ...root,
+    branches: root.branches
+      .filter((branch) => branch.id !== id)
+      .map((branch) => ({
+        ...branch,
+        children: (branch.children || [])
+          .filter((child) => child.id !== id)
+          .map((child) => ({
+            ...child,
+            children: (child.children || []).filter((output) => output.id !== id),
+          })),
+      })),
+  });
+
+  const insertNodeIntoTree = (root, target, node) => {
+    if (target.level === "ULTIMATE") {
+      return { ...root, branches: [...root.branches, node] };
+    }
+    if (target.level === "INTERMEDIATE") {
+      return {
+        ...root,
+        branches: root.branches.map((branch) =>
+          branch.id === target.id ? { ...branch, children: [...(branch.children || []), node] } : branch
+        ),
+      };
+    }
+    // IMMEDIATE -> menambah OUTPUT
+    return {
+      ...root,
+      branches: root.branches.map((branch) => ({
+        ...branch,
+        children: (branch.children || []).map((child) =>
+          child.id === target.id ? { ...child, children: [...(child.children || []), node] } : child
+        ),
+      })),
+    };
+  };
+
+  // Membuka modal edit untuk node yang diklik
+  const openEditModal = (node, level) => {
+    const nodeLevel = node.level || level;
+    setSelected({ ...node, level: nodeLevel });
+    setEditForm({ title: node.title || "", indicator: node.indicator || "", level: nodeLevel });
+    setShowEditModal(true);
+    setErrorData("");
+  };
+
+  // Menyimpan node baru langsung ke server (tanpa tombol Simpan Perubahan)
+  const addNode = async (target = selected) => {
     if (!pohonKinerjaData) {
       setErrorData("Pohon Kinerja tahun ini belum dibuat. Tambahkan Pohon Kinerja Baru terlebih dahulu.");
       return;
@@ -290,286 +433,128 @@ function EditablePohonKinerja() {
       OUTPUT: "OUTPUT",
     }[target.level];
 
-    const parentId = target.level === "ULTIMATE"
-      ? target.id
-      : target.id;
+    const defaultTitle = nodeLevel === "INTERMEDIATE"
+      ? "SASARAN ANTARA BARU"
+      : nodeLevel === "IMMEDIATE"
+        ? "SASARAN LANGSUNG BARU"
+        : "OUTPUT BARU";
+    const defaultIndicator = "Tambahkan indikator";
 
-    const node = {
-      id: `node-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
-      level: nodeLevel,
-      title: nodeLevel === "INTERMEDIATE"
-        ? "SASARAN ANTARA BARU"
-        : nodeLevel === "IMMEDIATE"
-          ? "SASARAN LANGSUNG BARU"
-          : "OUTPUT BARU",
-      indicator: "Tambahkan indikator",
-      _parentId: parentId,
-      _isNew: true,
-    };
+    setAddingNode(true);
+    setErrorData("");
+    try {
+      const response = await fetch("http://localhost:8000/api/pohon-kinerja/node", {
+        method: "POST",
+        headers: { Accept: "application/json", "Content-Type": "application/json" },
+        body: JSON.stringify({
+          level: nodeLevel,
+          parent_id: target.id,
+          title: defaultTitle,
+          indicator: defaultIndicator,
+        }),
+      });
+      const data = await response.json();
+      if (!response.ok) {
+        throw new Error(data.message || `Gagal menambahkan ${nodeLevel}`);
+      }
 
-    if (target.level === "ULTIMATE") {
-      setTree((current) => ({
-        ...current,
-        branches: [...current.branches, { ...node, children: [] }],
-      }));
-      setSelected(node);
-      setNewNodes((current) => [...current, node]);
-      setSaved(false);
-      return;
+      const newNode = {
+        id: `${nodeLevel.toLowerCase()}-${data.data.id}`,
+        level: nodeLevel,
+        title: defaultTitle,
+        indicator: defaultIndicator,
+        children: [],
+      };
+
+      setTree((current) => insertNodeIntoTree(current, target, newNode));
+      // Langsung buka modal supaya node baru bisa diberi nama/indikator.
+      openEditModal(newNode, nodeLevel);
+    } catch (error) {
+      setErrorData(error.message || "Gagal menambahkan node");
+    } finally {
+      setAddingNode(false);
     }
-
-    if (target.level === "INTERMEDIATE") {
-      setTree((current) => ({
-        ...current,
-        branches: current.branches.map((branch) =>
-          branch.id === target.id
-            ? { ...branch, children: [...(branch.children || []), { ...node, children: [] }] }
-            : branch
-        ),
-      }));
-      setSelected(node);
-      setNewNodes((current) => [...current, node]);
-      setSaved(false);
-      return;
-    }
-
-    const branchId = tree.branches
-      .find((branch) => branch.children?.some((child) => child.id === target.id))?.id;
-
-    const parentImmediateId = target.level === "OUTPUT"
-      ? tree.branches
-          .flatMap((branch) => branch.children || [])
-          .find((child) => child.children?.some((output) => output.id === target.id))?.id
-      : target.id;
-
-    if (!branchId || !parentImmediateId) {
-      setErrorData("Parent node tidak ditemukan.");
-      return;
-    }
-
-    const actualParentId = target.level === "OUTPUT" ? parentImmediateId : target.id;
-    const actualParentLevel = target.level === "OUTPUT" ? "IMMEDIATE" : target.level;
-    const nodeWithParent = { ...node, _parentId: actualParentId, _parentLevel: actualParentLevel };
-
-    setTree((current) => ({
-      ...current,
-      branches: current.branches.map((branch) =>
-        branch.id === branchId
-          ? {
-              ...branch,
-              children: branch.children.map((child) =>
-                child.id === parentImmediateId
-                  ? { ...child, children: [...(child.children || []), nodeWithParent] }
-                  : child
-              ),
-            }
-          : branch
-      ),
-    }));
-    setSelected(nodeWithParent);
-    setNewNodes((current) => [...current, nodeWithParent]);
-    setSaved(false);
   };
   const addIntermediate = () => addNode({ ...tree, id: tree.id || "ultimate", level: "ULTIMATE" });
 
   const addImmediate = (target) => addNode({ ...target, level: "INTERMEDIATE" });
 
-  const deleteNode = () => {
-    if (selected.level === "ULTIMATE") return;
-
-    const deletedNode = {
-      id: selected.id,
-      level: selected.level,
-    };
-
-    // Node baru yang belum tersimpan cukup dihapus dari antrean lokal.
-    if (selected.id.startsWith("node-")) {
-      setNewNodes((current) => current.filter((item) => item.id !== selected.id));
-    } else {
-      // Node lama ditandai untuk dihapus dari database saat tombol Simpan Perubahan ditekan.
-      setDeletedNodes((current) => {
-        if (current.some((item) => item.id === deletedNode.id)) {
-          return current;
-        }
-        return [...current, deletedNode];
-      });
-    }
-
-    // Hapus node dari tampilan tanpa mengubah struktur/tampilan bagan lainnya.
-    setTree((current) => ({
-      ...current,
-      branches: current.branches
-        .filter((branch) => branch.id !== selected.id)
-        .map((branch) => ({
-          ...branch,
-          children: (branch.children || [])
-            .filter((child) => child.id !== selected.id)
-            .map((child) => ({
-              ...child,
-              children: (child.children || []).filter(
-                (output) => output.id !== selected.id
-              ),
-            })),
-        })),
-    }));
-
-    // Kembali ke Ultimate setelah node dihapus dari tampilan.
-    setSelected({
-      ...tree,
-      id: tree.id || "ultimate",
-      level: "ULTIMATE",
-    });
-
-    setSaved(false);
+  // Menyimpan perubahan judul/indikator node yang sedang dibuka di modal, langsung ke server.
+  const saveNodeEdit = async () => {
+    if (!selected?.id) return;
+    setSavingNode(true);
     setErrorData("");
-  };
-
-  const saveChanges = async () => {
     try {
-      // 1. Simpan node baru terlebih dahulu agar mendapatkan ID database.
-      const createdNodes = [];
-
-      for (const newNode of newNodes) {
-        const level = newNode.level;
-        let parentId = newNode._parentId;
-
-        // Jika parent juga merupakan node baru, gunakan ID database yang baru dibuat.
-        const createdParent = createdNodes.find((item) => item.tempId === parentId);
-        if (createdParent) {
-          parentId = createdParent.id;
-        } else if (typeof parentId === "string" && parentId.includes("-")) {
-          const parentParts = parentId.split("-");
-          const possibleId = Number(parentParts[parentParts.length - 1]);
-          if (Number.isInteger(possibleId)) parentId = possibleId;
-        }
-
-        if (!parentId) {
-          throw new Error(`Parent ${level} tidak ditemukan.`);
-        }
-
-        const createResponse = await fetch(
-          "http://localhost:8000/api/pohon-kinerja/node",
-          {
-            method: "POST",
-            headers: {
-              Accept: "application/json",
-              "Content-Type": "application/json",
-            },
-            body: JSON.stringify({
-              level,
-              parent_id: parentId,
-              title: newNode.title || "",
-              indicator: newNode.indicator || "",
-            }),
-          }
-        );
-
-        const createData = await createResponse.json();
-        if (!createResponse.ok) {
-          throw new Error(createData.message || `Gagal menambahkan ${level}`);
-        }
-
-        createdNodes.push({
-          tempId: newNode.id,
-          id: createData.data.id,
-          level,
-        });
-      }
-
-      // Ganti temporary ID dengan ID database supaya edit/hapus berikutnya normal.
-      if (createdNodes.length > 0) {
-        setTree((current) => {
-          const replaceIds = (node) => {
-            const created = createdNodes.find((item) => item.tempId === node.id);
-            return {
-              ...node,
-              ...(created ? { id: `${created.level.toLowerCase()}-${created.id}` } : {}),
-              ...(node.children ? { children: node.children.map(replaceIds) } : {}),
-            };
-          };
-          return { ...current, branches: current.branches.map(replaceIds) };
-        });
-
-        setSelected((current) => {
-          const created = createdNodes.find((item) => item.tempId === current.id);
-          return created
-            ? { ...current, id: `${created.level.toLowerCase()}-${created.id}` }
-            : current;
-        });
-      }
-
-      // 2. Proses semua node lama yang dihapus.
-      for (const deletedNode of deletedNodes) {
-        const [deleteLevel, deleteIdString] = deletedNode.id.split("-");
-        const deleteId = Number(deleteIdString);
-
-        if (!deleteLevel || !Number.isInteger(deleteId)) {
-          throw new Error(`ID node yang dihapus tidak valid: ${deletedNode.id}`);
-        }
-
-        const deleteResponse = await fetch(
-          `http://localhost:8000/api/pohon-kinerja/node/${deleteLevel}/${deleteId}`,
-          { method: "DELETE", headers: { Accept: "application/json" } }
-        );
-
-        const deleteData = await deleteResponse.json();
-        if (!deleteResponse.ok) {
-          throw new Error(deleteData.message || `Gagal menghapus ${deletedNode.level}`);
-        }
-      }
-
-      // 3. Update node yang sedang dipilih jika node tersebut berasal dari database.
-      const selectedIsNew = selected.id.startsWith("node-");
-      if (!selectedIsNew && selected.id) {
+      if (selected.level !== "ULTIMATE") {
         const [level, idString] = selected.id.split("-");
         const id = Number(idString);
-
-        if (!Number.isInteger(id)) {
+        if (!level || !Number.isInteger(id)) {
           throw new Error("ID node tidak valid.");
         }
-
-        const response = await fetch(
-          `http://localhost:8000/api/pohon-kinerja/node/${level}/${id}`,
-          {
-            method: "PUT",
-            headers: {
-              Accept: "application/json",
-              "Content-Type": "application/json",
-            },
-            body: JSON.stringify({
-              title: selected.title || "",
-              indicator: selected.indicator || "",
-            }),
-          }
-        );
-
+        const response = await fetch(`http://localhost:8000/api/pohon-kinerja/node/${level}/${id}`, {
+          method: "PUT",
+          headers: { Accept: "application/json", "Content-Type": "application/json" },
+          body: JSON.stringify({ title: editForm.title || "", indicator: editForm.indicator || "" }),
+        });
         const data = await response.json();
         if (!response.ok) {
           throw new Error(data.message || "Gagal menyimpan perubahan");
         }
       }
 
-      setNewNodes([]);
-      setDeletedNodes([]);
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(tree));
-      setSaved(true);
-      setErrorData("");
-
-      // Ambil ulang dari database agar state benar-benar sinkron.
-      const refresh = await fetch(
-        `http://localhost:8000/api/pohon-kinerja/tree?tahun=${encodeURIComponent(tahun)}${unitKerja ? `&unit_kerja=${encodeURIComponent(unitKerja)}` : ""}`,
-        { headers: { Accept: "application/json" } }
-      );
-      const refreshData = await refresh.json();
-      if (refresh.ok) {
-        setTree(refreshData.data.tree);
-        setTreeData(refreshData.data.tree);
-        setPohonKinerjaData(refreshData.data);
-        setSelected({ ...refreshData.data.tree, level: "ULTIMATE" });
-      }
+      setTree((current) => patchNodeInTree(current, selected.id, {
+        title: editForm.title,
+        indicator: editForm.indicator,
+      }));
+      setSelected((current) => ({ ...current, title: editForm.title, indicator: editForm.indicator }));
+      setShowEditModal(false);
     } catch (error) {
-      setSaved(false);
       setErrorData(error.message || "Gagal menyimpan perubahan");
+    } finally {
+      setSavingNode(false);
+    }
+  };
+
+  // Meminta konfirmasi sebelum node benar-benar dihapus.
+  const requestDeleteNode = () => {
+    if (selected.level === "ULTIMATE") return;
+    setShowDeleteConfirm(true);
+  };
+
+  // Menghapus node dari server setelah dikonfirmasi.
+  const confirmDeleteNode = async () => {
+    if (selected.level === "ULTIMATE") {
+      setShowDeleteConfirm(false);
+      return;
+    }
+
+    setDeletingNode(true);
+    setErrorData("");
+    try {
+      const [level, idString] = selected.id.split("-");
+      const id = Number(idString);
+      if (!level || !Number.isInteger(id)) {
+        throw new Error(`ID node yang dihapus tidak valid: ${selected.id}`);
+      }
+
+      const response = await fetch(`http://localhost:8000/api/pohon-kinerja/node/${level}/${id}`, {
+        method: "DELETE",
+        headers: { Accept: "application/json" },
+      });
+      const data = await response.json();
+      if (!response.ok) {
+        throw new Error(data.message || `Gagal menghapus ${selected.level}`);
+      }
+
+      const deletedId = selected.id;
+      setTree((current) => removeNodeFromTree(current, deletedId));
+      setSelected({ ...tree, id: tree.id || "ultimate", level: "ULTIMATE" });
+      setShowDeleteConfirm(false);
+      setShowEditModal(false);
+    } catch (error) {
+      setErrorData(error.message || "Gagal menghapus node");
+    } finally {
+      setDeletingNode(false);
     }
   };
   const handleArchive = async () => {
@@ -608,9 +593,6 @@ function EditablePohonKinerja() {
       setTreeData(null);
       setTree(initialTree);
       setSelected({ ...initialTree, id: "ultimate", level: "ULTIMATE" });
-      setNewNodes([]);
-      setDeletedNodes([]);
-      setSaved(false);
 
       setAvailableYears((current) => {
         const years = [...new Set(current.map(Number))];
@@ -716,9 +698,6 @@ function EditablePohonKinerja() {
       );
       setUnitKerja(newYearForm.unit_kerja);
       setTahun(String(newYearForm.tahun));
-      setNewNodes([]);
-      setDeletedNodes([]);
-      setSaved(false);
 
       // Jika endpoint duplicate mengembalikan tree, tampilkan langsung tanpa menunggu fetch berikutnya.
       if (data.data?.tree) {
@@ -738,97 +717,117 @@ function EditablePohonKinerja() {
     <style>{`@media print { @page { size: landscape; margin: 8mm; } body { overflow: visible !important; } body * { visibility: hidden !important; } #performance-tree, #performance-tree * { visibility: visible !important; -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; } #performance-tree { position: absolute; left: 0; top: 0; width: 100% !important; max-width: 100% !important; overflow: visible !important; border: 0 !important; box-shadow: none !important; } #performance-tree > div { width: 100% !important; min-width: 0 !important; padding: 0 !important; } #performance-tree > div > div { display: block !important; width: 100% !important; min-width: 0 !important; } #performance-tree section { width: 100% !important; overflow: visible !important; } #performance-tree section > div { width: max-content !important; min-width: 0 !important; zoom: 0.7; transform-origin: top left; } #performance-tree aside { display: none !important; } #performance-tree button { cursor: default; } }`}</style>
     <main className="w-full min-w-0 overflow-y-auto bg-slate-50 p-6 md:p-8">
       <nav className="mb-6 flex items-center gap-2 text-sm text-slate-500"><span>Dashboard</span><span className="material-symbols-outlined text-[16px]">chevron_right</span><span className="font-bold text-blue-950">Pohon Kinerja</span></nav>
-      <div className="flex flex-wrap gap-2">
+      <div className="flex flex-wrap items-center gap-2">
 
-  {/* Simpan Perubahan */}
-  <button
-    type="button"
-    onClick={saveChanges}
-    className="flex items-center gap-2 rounded bg-blue-950 px-4 py-2 font-semibold text-white shadow-sm hover:bg-blue-900"
-  >
-    <span className="material-symbols-outlined text-[18px]">
-      save
-    </span>
-    {saved ? "Tersimpan" : "Simpan Perubahan"}
-  </button>
+        {/* Menu Aksi */}
+        <div className="relative">
+          <button
+            type="button"
+            onClick={() => setShowActionMenu((current) => !current)}
+            className="flex items-center gap-2 rounded bg-blue-600 px-4 py-2 font-semibold text-white shadow-sm transition hover:bg-blue-700"
+          >
+            <span className="material-symbols-outlined text-[18px]">
+              menu
+            </span>
+            Menu
+            <span className="material-symbols-outlined text-[18px]">
+              {showActionMenu ? "expand_less" : "expand_more"}
+            </span>
+          </button>
 
-  {/* Export Excel */}
-  <button
-    type="button"
-    onClick={() => downloadExcel(tree, tahun, unitKerja || pohonKinerjaData?.unit_kerja)}
-    className="flex items-center gap-2 rounded border border-blue-950 px-4 py-2 text-blue-950 hover:bg-blue-50"
-  >
-    <span className="material-symbols-outlined text-[18px]">
-      table_view
-    </span>
-    Export Excel
-  </button>
+          {showActionMenu && (
+            <div className="absolute left-0 top-full z-40 mt-2 w-56 overflow-hidden rounded-lg border border-slate-200 bg-white py-1 shadow-lg">
 
-  {/* Export PDF */}
-  <button
-    type="button"
-    onClick={() => window.print()}
-    className="flex items-center gap-2 rounded border border-blue-950 px-4 py-2 text-blue-950 hover:bg-blue-50"
-  >
-    <span className="material-symbols-outlined text-[18px]">
-      picture_as_pdf
-    </span>
-    Export PDF
-  </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setShowActionMenu(false);
+                  downloadExcel(
+                    tree,
+                    tahun,
+                    unitKerja || pohonKinerjaData?.unit_kerja
+                  );
+                }}
+                className="flex w-full items-center gap-3 px-4 py-3 text-left text-sm text-slate-700 hover:bg-blue-50 hover:text-blue-700"
+              >
+                <span className="material-symbols-outlined text-[19px]">table_view</span>
+                Export Excel
+              </button>
 
-  {/* Upload File */}
-  <button
-    type="button"
-    onClick={() => setShowUpload(true)}
-    className="flex items-center gap-2 rounded border border-blue-950 px-4 py-2 text-blue-950 hover:bg-blue-50"
-  >
-    <span className="material-symbols-outlined text-[18px]">
-      upload
-    </span>
-    Upload File
-  </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setShowActionMenu(false);
+                  window.print();
+                }}
+                className="flex w-full items-center gap-3 px-4 py-3 text-left text-sm text-slate-700 hover:bg-blue-50 hover:text-blue-700"
+              >
+                <span className="material-symbols-outlined text-[19px]">picture_as_pdf</span>
+                Export PDF
+              </button>
 
-  <button
-    type="button"
-    onClick={addIntermediate}
-    className="flex items-center gap-2 rounded bg-emerald-700 px-4 py-2 font-semibold text-white shadow-sm hover:bg-emerald-800"
-  >
-    <span className="material-symbols-outlined text-[18px]">
-      add
-    </span>
-    Tambah Intermediate
-  </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setShowActionMenu(false);
+                  setShowUpload(true);
+                }}
+                className="flex w-full items-center gap-3 px-4 py-3 text-left text-sm text-slate-700 hover:bg-blue-50 hover:text-blue-700"
+              >
+                <span className="material-symbols-outlined text-[19px]">upload</span>
+                Upload File
+              </button>
 
-  {pohonKinerjaData && (
-    <button
-      type="button"
-      onClick={() => setShowArchiveModal(true)}
-      className="flex items-center gap-2 rounded border border-orange-600 px-4 py-2 text-orange-600 hover:bg-orange-50"
-    >
-      <span className="material-symbols-outlined text-[18px]">
-        archive
-      </span>
-      Arsipkan Tahun
-    </button>
-  )}
+              {pohonKinerjaData && (
+                <>
+                  <div className="my-1 border-t border-slate-100" />
 
-  <button
-    type="button"
-    onClick={() => {
-      setShowArchivedList(true);
-      if (archivedData.length === 0) {
-        fetchArchivedData();
-      }
-    }}
-    className="flex items-center gap-2 rounded border border-purple-600 px-4 py-2 text-purple-600 hover:bg-purple-50"
-  >
-    <span className="material-symbols-outlined text-[18px]">
-      history
-    </span>
-    Lihat Arsipan
-  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setShowActionMenu(false);
+                      setShowArchiveModal(true);
+                    }}
+                    className="flex w-full items-center gap-3 px-4 py-3 text-left text-sm text-slate-700 hover:bg-orange-50 hover:text-orange-700"
+                  >
+                    <span className="material-symbols-outlined text-[19px]">archive</span>
+                    Arsipkan Tahun
+                  </button>
+                </>
+              )}
 
-</div>
+              <button
+                type="button"
+                onClick={() => {
+                  setShowActionMenu(false);
+                  setShowArchivedList(true);
+                  if (archivedData.length === 0) {
+                    fetchArchivedData();
+                  }
+                }}
+                className="flex w-full items-center gap-3 px-4 py-3 text-left text-sm text-slate-700 hover:bg-purple-50 hover:text-purple-700"
+              >
+                <span className="material-symbols-outlined text-[19px]">history</span>
+                Lihat Arsipan
+              </button>
+            </div>
+          )}
+        </div>
+
+        {/* Tambah Intermediate tetap terpisah, hanya warna diubah menjadi biru */}
+        <button
+          type="button"
+          onClick={addIntermediate}
+          disabled={addingNode}
+          className="flex items-center gap-2 rounded bg-blue-600 px-4 py-2 font-semibold text-white shadow-sm transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
+        >
+          <span className="material-symbols-outlined text-[18px]">
+            {addingNode ? "hourglass_empty" : "add"}
+          </span>
+          {addingNode ? "Menambahkan..." : "Tambah Intermediate"}
+        </button>
+
+      </div>
       <div className="mb-8 rounded-lg border border-slate-300 bg-white p-6 shadow-sm"><div className="grid grid-cols-1 gap-4 md:grid-cols-4">
         <div className="flex flex-col gap-1">
           <label className="text-xs font-semibold text-slate-500 uppercase tracking-wider">
@@ -919,11 +918,14 @@ function EditablePohonKinerja() {
 
           {/* Tampilkan tree jika data ada */}
           {pohonKinerjaData && (
-          <div className="grid gap-6 xl:grid-cols-[minmax(0,1fr)_300px] w-max min-w-full">
+          <div className="w-max min-w-full">
             <section className="w-full min-w-0">
-              <div className="min-w-max px-8 pb-20 pt-8">
+              <div ref={treeSectionRef} className="relative flex flex-col items-center px-8 pb-20 pt-8">
+                {/* Lapisan garis panah langsung antar-node */}
+                <TreeConnectors containerRef={treeSectionRef} nodeRefs={nodeRefs} edges={edges} />
+
                 {/* Header Pohon Kinerja */}
-                <div className="mx-auto mb-8 flex w-72 flex-col items-center rounded-lg border-2 border-emerald-400 bg-white p-4 text-center shadow-sm">
+                <div className="relative mx-auto mb-8 flex w-72 flex-col items-center rounded-lg border-2 border-emerald-400 bg-white p-4 text-center shadow-sm">
                   <div className="mb-1 font-bold text-emerald-600">
                     POHON KINERJA
                   </div>
@@ -937,64 +939,68 @@ function EditablePohonKinerja() {
                 </div>
 
                 {/* Ultimate */}
-                <div className="flex flex-col items-center">
+                <div className="relative flex flex-col items-center">
                   <TreeNode
                     node={tree}
                     level="ULTIMATE"
-                    selected={selected.id === "ultimate"}
-                    onSelect={setSelected}
+                    selected={selected.id === ultimateId}
+                    onSelect={openEditModal}
+                    domRef={registerNodeRef(ultimateId)}
                   />
-                  <div className="h-8 w-px bg-slate-400" />
+                  <div className="h-8" />
                 </div>
 
                 {/* Intermediate */}
-                <div className="relative flex min-w-max justify-center gap-8 pt-5 before:absolute before:left-0 before:right-0 before:top-0 before:h-px before:bg-slate-400">
+                <div className="relative flex justify-center gap-8 pt-5">
                   {tree.branches.map((branch) => (
                     <div
                       key={branch.id}
-                      className="flex w-[250px] shrink-0 flex-col items-center"
+                      className="relative flex shrink-0 flex-col items-center"
                     >
-                      <div className="h-5 w-px shrink-0 bg-slate-400" />
+                      <div className="h-5 shrink-0" />
 
                       {/* Intermediate Node */}
                       <TreeNode
                         node={branch}
                         level="INTERMEDIATE"
                         selected={selected.id === branch.id}
-                        onSelect={setSelected}
+                        onSelect={openEditModal}
+                        domRef={registerNodeRef(branch.id)}
                       />
 
-                      <div className="my-5 h-5 w-px shrink-0 bg-slate-400" />
+                      <div className="my-5 h-5 shrink-0" />
 
-                      {/* Immediate */}
+                      {/* Immediate - sejajar berdampingan, bukan bertumpuk ke bawah */}
                       {branch.children?.length > 0 && (
-                        <div className="flex w-full flex-col items-center gap-5">
+                        <div className="relative flex flex-wrap items-start justify-center gap-6">
                           {branch.children.map((child) => (
                             <div
                               key={child.id}
-                              className="flex w-full flex-col items-center"
+                              className="relative flex flex-col items-center"
                             >
                               {/* Immediate Node */}
                               <TreeNode
                                 node={child}
                                 level="IMMEDIATE"
                                 selected={selected.id === child.id}
-                                onSelect={setSelected}
+                                onSelect={openEditModal}
+                                domRef={registerNodeRef(child.id)}
                               />
 
                               {/* Output */}
                               {child.children?.length > 0 && (
-                                <div className="mt-5 flex w-full flex-col items-center gap-5 border-t border-slate-400 pt-5">
+                                <div className="mt-5 flex flex-col items-center gap-5 pt-5">
                                   {child.children.map((output) => (
                                     <div
                                       key={output.id}
-                                      className="relative flex w-full flex-col items-center before:absolute before:-top-5 before:h-5 before:border-l before:border-slate-400"
+                                      className="relative flex flex-col items-center"
                                     >
                                       <TreeNode
                                         node={output}
                                         level="OUTPUT"
                                         selected={selected.id === output.id}
-                                        onSelect={setSelected}
+                                        onSelect={openEditModal}
+                                        domRef={registerNodeRef(output.id)}
                                       />
                                     </div>
                                   ))}
@@ -1010,7 +1016,8 @@ function EditablePohonKinerja() {
                                     level: "IMMEDIATE",
                                   })
                                 }
-                                className="mb-3 mt-3 flex print:hidden items-center gap-1 text-xs font-bold text-amber-700 hover:text-amber-900"
+                                disabled={addingNode}
+                                className="mb-1 mt-3 flex print:hidden items-center gap-1 text-xs font-bold text-amber-700 hover:text-amber-900 disabled:cursor-not-allowed disabled:opacity-50"
                               >
                                 <span className="material-symbols-outlined text-[16px]">
                                   add_circle
@@ -1026,7 +1033,8 @@ function EditablePohonKinerja() {
                       <button
                         type="button"
                         onClick={() => addImmediate(branch)}
-                        className="mt-5 mb-4 flex print:hidden items-center gap-1 text-xs font-bold text-blue-700 hover:text-blue-950"
+                        disabled={addingNode}
+                        className="mt-5 mb-4 flex print:hidden items-center gap-1 text-xs font-bold text-blue-700 hover:text-blue-950 disabled:cursor-not-allowed disabled:opacity-50"
                       >
                         <span className="material-symbols-outlined text-[16px]">
                           add_circle
@@ -1038,57 +1046,127 @@ function EditablePohonKinerja() {
                 </div>
               </div>
             </section>
-          <aside className="h-fit rounded-lg border border-slate-300 bg-white p-5 shadow-sm print:hidden">
-          {false && pohonKinerjaData ? (
-            <>
-              <div className="mb-5 flex items-start justify-between">
-                <div>
-                  <p className="text-xs font-bold uppercase tracking-widest text-green-700">Data Terimport</p>
-                  <h3 className="mt-1 text-lg font-bold text-slate-900">Informasi Pohon</h3>
-                </div>
-                <span className="material-symbols-outlined text-slate-400">info</span>
-              </div>
-              <div className="space-y-3 text-sm">
-                <p><strong>Tahun:</strong> {pohonKinerjaData.tahun}</p>
-                <p><strong>Unit Kerja:</strong> {pohonKinerjaData.unit_kerja}</p>
-                <p><strong>Total Ultimate:</strong> {pohonKinerjaData.tree.branches.length}</p>
-                <p><strong>Total Sasaran:</strong> {pohonKinerjaData.tree.branches.reduce((acc, b) => acc + (b.children?.length || 0), 0)}</p>
-              </div>
-            </>
-          ) : (
-            <>
-              <div className="mb-5 flex items-start justify-between">
-                <div>
-                  <p className="text-xs font-bold uppercase tracking-widest text-blue-700">Editor Node</p>
-                  <h3 className="mt-1 text-lg font-bold text-slate-900">{selected.level === "ULTIMATE" ? "Edit Ultimate" : "Detail kinerja"}</h3>
-                </div>
-                <span className="material-symbols-outlined text-slate-400">edit_note</span>
-              </div>
-              <label className="mb-4 flex flex-col gap-1 text-xs font-semibold uppercase tracking-wider text-slate-500">
-                Level
-                <select value={selected.level} onChange={(event) => updateSelected("level", event.target.value)} disabled={selected.level === "ULTIMATE"} className="rounded border border-slate-300 p-2 text-sm font-normal normal-case tracking-normal text-slate-700"><option value="ULTIMATE">ULTIMATE</option><option value="INTERMEDIATE">INTERMEDIATE</option><option value="IMMEDIATE">IMMEDIATE</option><option value="OUTPUT">OUTPUT</option></select>
-              </label>
-              <label className="mb-4 flex flex-col gap-1 text-xs font-semibold uppercase tracking-wider text-slate-500">
-                Tujuan / Sasaran
-                <textarea value={selected.title || ""} onChange={(event) => updateSelected("title", event.target.value)} rows="4" className="resize-y rounded border border-slate-300 p-2 text-sm font-normal normal-case tracking-normal text-slate-700 outline-none focus:border-blue-950" />
-              </label>
-              <label className="mb-5 flex flex-col gap-1 text-xs font-semibold uppercase tracking-wider text-slate-500">
-                Indikator
-                <textarea value={selected.indicator || ""} onChange={(event) => updateSelected("indicator", event.target.value)} rows="3" className="resize-y rounded border border-slate-300 p-2 text-sm font-normal normal-case tracking-normal text-slate-700 outline-none focus:border-blue-950" />
-              </label>
-              <div className="flex gap-2 border-t border-slate-200 pt-4">
-                <button type="button" onClick={saveChanges} className="flex flex-1 items-center justify-center gap-1 rounded border border-emerald-800 px-3 py-2 text-sm font-semibold text-emerald-800 hover:bg-emerald-50"><span className="material-symbols-outlined text-[17px]">edit</span>Edit</button>
-                <button type="button" onClick={deleteNode} disabled={selected.level === "ULTIMATE"} className="flex flex-1 items-center justify-center gap-1 rounded border border-red-800 px-3 py-2 text-sm font-semibold text-red-800 hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-40"><span className="material-symbols-outlined text-[17px]">delete</span>Hapus</button>
-              </div>
-            </>
-          )}
-          </aside>
           </div>
           )}
         </div>
       </div>
     </main>
     {showUpload && <UploadModal onClose={() => setShowUpload(false)} onUploadSuccess={(tahunBaru) => { setShowUpload(false); setTahun(tahunBaru); }} />}
+
+    {showEditModal && (
+      <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+        <div className="w-full max-w-lg rounded-xl bg-white shadow-2xl">
+          <div className="flex items-start justify-between border-b border-slate-200 p-6">
+            <div>
+              <p className="text-xs font-bold uppercase tracking-widest text-blue-700">
+                {selected.level === "ULTIMATE" ? "Edit Ultimate" : "Editor Node"}
+              </p>
+              <h2 className="mt-1 text-xl font-bold text-slate-900">{selected.level}</h2>
+            </div>
+            <button
+              type="button"
+              onClick={() => setShowEditModal(false)}
+              disabled={savingNode || deletingNode}
+              className="text-slate-400 hover:text-red-600 disabled:opacity-50"
+            >
+              <span className="material-symbols-outlined">close</span>
+            </button>
+          </div>
+
+          <div className="space-y-4 p-6">
+            {errorData && (
+              <div className="rounded-lg border border-red-300 bg-red-50 p-3 text-sm text-red-800">
+                {errorData}
+              </div>
+            )}
+
+            <label className="flex flex-col gap-1 text-xs font-semibold uppercase tracking-wider text-slate-500">
+              Tujuan / Sasaran
+              <textarea
+                value={editForm.title}
+                onChange={(event) => setEditForm((current) => ({ ...current, title: event.target.value }))}
+                rows="4"
+                disabled={savingNode || deletingNode}
+                className="resize-y rounded border border-slate-300 p-2 text-sm font-normal normal-case tracking-normal text-slate-700 outline-none focus:border-blue-950 disabled:bg-slate-100"
+              />
+            </label>
+
+            <label className="flex flex-col gap-1 text-xs font-semibold uppercase tracking-wider text-slate-500">
+              Indikator
+              <textarea
+                value={editForm.indicator}
+                onChange={(event) => setEditForm((current) => ({ ...current, indicator: event.target.value }))}
+                rows="3"
+                disabled={savingNode || deletingNode}
+                className="resize-y rounded border border-slate-300 p-2 text-sm font-normal normal-case tracking-normal text-slate-700 outline-none focus:border-blue-950 disabled:bg-slate-100"
+              />
+            </label>
+          </div>
+
+          <div className="flex gap-3 border-t border-slate-200 bg-slate-50 p-6">
+            <button
+              type="button"
+              onClick={requestDeleteNode}
+              disabled={selected.level === "ULTIMATE" || savingNode || deletingNode}
+              className="flex items-center justify-center gap-1 rounded border border-red-800 px-4 py-2 text-sm font-semibold text-red-800 hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-40"
+            >
+              <span className="material-symbols-outlined text-[17px]">delete</span>
+              Hapus
+            </button>
+            <div className="flex-1" />
+            <button
+              type="button"
+              onClick={() => setShowEditModal(false)}
+              disabled={savingNode || deletingNode}
+              className="rounded border border-slate-300 px-4 py-2 text-sm font-semibold text-slate-600 hover:bg-white disabled:opacity-50"
+            >
+              Batal
+            </button>
+            <button
+              type="button"
+              onClick={saveNodeEdit}
+              disabled={savingNode || deletingNode}
+              className="flex items-center justify-center gap-1 rounded bg-blue-950 px-4 py-2 text-sm font-semibold text-white hover:bg-blue-900 disabled:opacity-50"
+            >
+              <span className="material-symbols-outlined text-[17px]">save</span>
+              {savingNode ? "Menyimpan..." : "Simpan"}
+            </button>
+          </div>
+        </div>
+      </div>
+    )}
+
+    {showDeleteConfirm && (
+      <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/50 p-4">
+        <div className="w-full max-w-md rounded-lg bg-white p-6 shadow-lg">
+          <h2 className="mb-4 text-lg font-bold text-slate-900">Konfirmasi Hapus</h2>
+          <p className="mb-2 text-slate-600">
+            Apakah Anda yakin ingin menghapus node <strong>"{selected.title}"</strong>?
+          </p>
+          <p className="mb-6 text-sm text-red-600">
+            Tindakan ini tidak dapat dibatalkan. Node beserta seluruh turunannya (jika ada) akan dihapus permanen.
+          </p>
+          <div className="flex gap-3">
+            <button
+              type="button"
+              onClick={() => setShowDeleteConfirm(false)}
+              disabled={deletingNode}
+              className="flex-1 rounded border border-slate-300 px-4 py-2 font-semibold text-slate-600 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              Batal
+            </button>
+            <button
+              type="button"
+              onClick={confirmDeleteNode}
+              disabled={deletingNode}
+              className="flex-1 rounded bg-red-700 px-4 py-2 font-semibold text-white hover:bg-red-800 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              {deletingNode ? "Menghapus..." : "Ya, Hapus"}
+            </button>
+          </div>
+        </div>
+      </div>
+    )}
 
     {showArchiveModal && (
       <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
@@ -1256,375 +1334,6 @@ function EditablePohonKinerja() {
       </div>
     )}
   </>;
-}
-
-export default EditablePohonKinerja;
-export { LegacyPohonKinerja };
-
-const _treeData = [
-  {
-    level: "INTERMEDIATE",
-    color: "blue",
-    title: "MENINGKATNYA PENYELENGGARAAN STATISTIK SEKTORAL",
-    indicator: "Indeks Pembangunan Statistik",
-  },
-  {
-    level: "IMMEDIATE",
-    color: "green",
-    title: "MENINGKATNYA KUALITAS DAN AKSES DATA SEKTORAL",
-    indicator:
-      "Persentase Data Statistik Sektoral yang dilakukan Pemutakhiran Dalam",
-  },
-];
-
-function TreeCard({ level, color, title, indicator }) {
-  const colors = {
-    red: {
-      border: "border-red-500",
-      head: "bg-red-500",
-      text: "text-red-500",
-    },
-    blue: {
-      border: "border-blue-500",
-      head: "bg-blue-500",
-      text: "text-blue-500",
-    },
-    green: {
-      border: "border-emerald-500",
-      head: "bg-emerald-500",
-      text: "text-emerald-500",
-    },
-    orange: {
-      border: "border-amber-500",
-      head: "bg-amber-500",
-      text: "text-amber-500",
-    },
-  };
-
-  const c = colors[color];
-
-  return (
-    <div className="relative flex justify-center mb-12">
-      <div className="absolute -left-6 top-0 bottom-0 flex items-center">
-        <span
-          className={`writing-mode-vertical ${c.text} font-bold text-[10px]
-          tracking-widest border ${c.border} rounded px-1 py-4 bg-white`}
-        >
-          {level}
-        </span>
-      </div>
-
-      <div
-        className={`w-[280px] rounded-lg bg-white shadow-md border-[1.5px]
-        ${c.border} overflow-hidden relative z-10 text-center`}
-      >
-        <div
-          className={`${c.head} text-white w-full py-3 px-4
-          font-bold text-xs min-h-[50px] flex items-center justify-center`}
-        >
-          {title}
-        </div>
-
-        <div className="py-3 px-4 text-xs w-full border-t border-slate-200">
-          {indicator}
-        </div>
-      </div>
-    </div>
-  );
-}
-
-function ActivityCard({ children }) {
-  return (
-    <div className="w-[180px] rounded-lg bg-pink-50 p-3 shadow-sm border-[1.5px] border-dashed border-pink-500 flex items-center justify-center text-center">
-      <p className="text-[10px] font-medium text-pink-700">
-        {children}
-      </p>
-    </div>
-  );
-}
-
-function LegacyPohonKinerja() {
-  const [showUpload, setShowUpload] = useState(false);
-
-  return (
-    <>
-      <main className="flex-1 overflow-y-auto p-6 md:p-8 bg-slate-50">
-
-        {/* Breadcrumb */}
-        <nav className="flex items-center gap-2 text-sm text-slate-500 mb-6">
-          <span className="hover:text-blue-900 cursor-pointer">
-            Dashboard
-          </span>
-
-          <span className="material-symbols-outlined text-[16px]">
-            chevron_right
-          </span>
-
-          <span className="text-blue-950 font-bold">
-            Pohon Kinerja
-          </span>
-        </nav>
-
-        {/* Header */}
-        <div className="flex flex-col md:flex-row justify-between items-start md:items-end gap-4 mb-8">
-          <div>
-            <h2 className="text-3xl font-bold text-slate-900 mb-1">
-              Pohon Kinerja
-            </h2>
-
-            <p className="text-slate-500">
-              Visualisasi hierarki tujuan, sasaran, dan indikator kinerja
-              organisasi.
-            </p>
-          </div>
-
-        </div>
-
-        {/* Filter */}
-        <div className="bg-white border border-slate-300 rounded-lg p-6 mb-8 shadow-sm">
-
-          <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-
-            <FilterSelect
-              label="Tahun"
-              options={["2026", "2025", "2024"]}
-            />
-
-            <FilterSelect
-              label="Unit Kerja"
-              options={[
-                "Dinas Komunikasi dan Informatika",
-                "Semua Unit Kerja",
-              ]}
-            />
-
-            <FilterSelect
-              label="Status"
-              options={[
-                "Semua Status",
-                "Draft",
-                "Published",
-              ]}
-            />
-
-            <div className="flex flex-col gap-1">
-              <label className="text-xs font-semibold text-slate-500 uppercase tracking-wider">
-                Pencarian
-              </label>
-
-              <div className="relative">
-                <span className="material-symbols-outlined absolute left-3 top-1/2 -translate-y-1/2 text-slate-500 text-[18px]">
-                  search
-                </span>
-
-                <input
-                  type="text"
-                  placeholder="Cari indikator..."
-                  className="w-full pl-10 pr-3 py-2 rounded border border-slate-300 bg-white focus:border-blue-950 focus:ring-2 focus:ring-blue-950/20 outline-none text-sm"
-                />
-              </div>
-            </div>
-
-          </div>
-        </div>
-
-        {/* Tree */}
-        <div className="bg-white border border-slate-300 rounded-lg shadow-sm overflow-auto h-[800px]">
-
-          <div className="min-w-[1500px] pb-20 flex flex-col items-center pt-8">
-
-            {/* Title */}
-            <div className="flex flex-col items-center mb-8 border border-emerald-500 rounded p-4 bg-white shadow-sm w-96 text-center">
-              <div className="text-emerald-600 font-bold mb-1">
-                POHON KINERJA
-              </div>
-
-              <div className="text-xs font-bold mb-1">
-                DINAS KOMUNIKASI DAN INFORMATIKA
-              </div>
-
-              <div className="text-xs">
-                TAHUN 2026
-              </div>
-            </div>
-
-            {/* Ultimate */}
-            <TreeCard
-              level="ULTIMATE"
-              color="red"
-              title="TERWUJUDNYA DIGITALISASI ADMINISTRASI PEMERINTAH"
-              indicator="Indeks Pemerintah Digital"
-            />
-
-            {/* Connector */}
-            <div className="w-px h-8 bg-slate-300" />
-
-            {/* Branches */}
-            <div className="grid grid-cols-3 gap-10 w-[1200px]">
-
-              {/* Branch 1 */}
-              <div className="flex flex-col items-center">
-
-                <TreeCard
-                  level="INTERMEDIATE"
-                  color="blue"
-                  title="MENINGKATNYA PENYELENGGARAAN STATISTIK SEKTORAL"
-                  indicator="Indeks Pembangunan Statistik"
-                />
-
-                <TreeCard
-                  level="IMMEDIATE"
-                  color="green"
-                  title="MENINGKATNYA KUALITAS DAN AKSES DATA SEKTORAL"
-                  indicator="Persentase Data Statistik Sektoral yang dilakukan Pemutakhiran"
-                />
-
-                <TreeCard
-                  level="INTERMEDIATE"
-                  color="blue"
-                  title="MENINGKATNYA PENYELENGGARAAN STATISTIK SEKTORAL"
-                  indicator="Indeks Pembangunan Statistik"
-                />
-
-              </div>
-
-              {/* Branch 2 */}
-              <div className="flex flex-col items-center">
-
-                <TreeCard
-                  level="INTERMEDIATE"
-                  color="blue"
-                  title="MENINGKATNYA TATA KELOLA KEAMANAN INFORMASI"
-                  indicator="Indeks Keamanan Informasi"
-                />
-
-                <TreeCard
-                  level="IMMEDIATE"
-                  color="green"
-                  title="MENINGKATNYA PENYELESAIAN GANGGUAN KEAMANAN INFORMASI"
-                  indicator="Persentase Gangguan yang diselesaikan"
-                />
-
-                <TreeCard
-                  level="OUTPUT"
-                  color="orange"
-                  title="MENINGKATNYA PENANGANAN GANGGUAN KEAMANAN INFORMASI"
-                  indicator="Persentase Gangguan yang ditangani"
-                />
-
-                <div className="flex gap-4 mb-12">
-                  <ActivityCard>
-                    Terlaksananya sosialisasi terkait edukasi kesadaran
-                    keamanan informasi SPBE.
-                  </ActivityCard>
-
-                  <ActivityCard>
-                    Terlaksananya pengembangan kompetensi SDM bidang
-                    keamanan informasi.
-                  </ActivityCard>
-                </div>
-
-                <TreeCard
-                  level="OUTPUT"
-                  color="orange"
-                  title="PERSENTASE GANGGUAN YANG DITANGANI"
-                  indicator=""
-                />
-
-              </div>
-
-              {/* Branch 3 */}
-              <div className="flex flex-col items-center">
-
-                <TreeCard
-                  level="INTERMEDIATE"
-                  color="blue"
-                  title="MENINGKATNYA KETERBUKAAN INFORMASI PUBLIK"
-                  indicator="Indeks Komunikasi Pembangunan dan Informasi Publik"
-                />
-
-                <TreeCard
-                  level="IMMEDIATE"
-                  color="green"
-                  title="MENINGKATNYA PELAYANAN INFORMASI PUBLIK"
-                  indicator="Persentase Layanan Informasi Publik"
-                />
-
-                <div className="grid grid-cols-3 gap-4 mb-12">
-
-                  <TreeCard
-                    level="OUTPUT"
-                    color="orange"
-                    title="MENINGKATNYA AKSES INFORMASI PADA MEDIA KOMUNIKASI PUBLIK"
-                    indicator="Jumlah Konten Informasi yang dipublikasikan"
-                  />
-
-                  <TreeCard
-                    level="OUTPUT"
-                    color="orange"
-                    title="MENINGKATNYA DISEMINASI INFORMASI"
-                    indicator="Jumlah Lembaga Komunikasi Publik"
-                  />
-
-                  <TreeCard
-                    level="OUTPUT"
-                    color="orange"
-                    title="MENINGKATNYA TANGGAPAN ATAS PERMOHONAN INFORMASI PUBLIK"
-                    indicator="Persentase Permohonan Informasi yang mendapatkan Tanggapan"
-                  />
-
-                </div>
-
-                <div className="flex gap-4 mb-12">
-
-                  <ActivityCard>
-                    Terlaksananya koordinasi dengan Forum Kelompok
-                    Informasi Masyarakat.
-                  </ActivityCard>
-
-                  <ActivityCard>
-                    Terlaksananya monitoring dan evaluasi kegiatan
-                    kemitraan.
-                  </ActivityCard>
-
-                </div>
-
-                <TreeCard
-                  level="OUTPUT"
-                  color="orange"
-                  title="JUMLAH LEMBAGA KOMUNIKASI PUBLIK YANG MENDUKUNG KEGIATAN KEMITRAAN"
-                  indicator=""
-                />
-
-              </div>
-
-            </div>
-          </div>
-        </div>
-      </main>
-
-      {/* Upload Modal */}
-      {showUpload && (
-        <UploadModal onClose={() => setShowUpload(false)} />
-      )}
-    </>
-  );
-}
-
-function FilterSelect({ label, options }) {
-  return (
-    <div className="flex flex-col gap-1">
-      <label className="text-xs font-semibold text-slate-500 uppercase tracking-wider">
-        {label}
-      </label>
-
-      <select className="w-full p-2 rounded border border-slate-300 bg-white focus:border-blue-950 focus:ring-2 focus:ring-blue-950/20 outline-none text-sm">
-        {options.map((option) => (
-          <option key={option}>{option}</option>
-        ))}
-      </select>
-    </div>
-  );
 }
 
 function UploadModal({ onClose, onUploadSuccess }) {
@@ -1838,3 +1547,5 @@ function UploadModal({ onClose, onUploadSuccess }) {
     </div>
   );
 }
+
+export default EditablePohonKinerja;
