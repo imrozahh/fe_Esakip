@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef, useLayoutEffect } from "react";
+import { useAuth } from "../context/AuthContext";
 
 const STORAGE_KEY = "esakip-pohon-kinerja";
 
@@ -37,6 +38,23 @@ const initialTree = {
     },
   ],
 };
+
+const BIDANG_OPTIONS = [
+  { value: "komunikasi", label: "Bidang Komunikasi" },
+  { value: "statistik", label: "Bidang Statistik" },
+  { value: "persandian", label: "Bidang Persandian" },
+  { value: "aplikasi", label: "Bidang Aplikasi" },
+  { value: "kesekretariatan", label: "Kesekretariatan" },
+];
+
+function getRoleLabel(role) {
+  return (
+    BIDANG_OPTIONS.find((b) => b.value === role)?.label ||
+    { admin: "Administrator" }[role] ||
+    role ||
+    "Pengguna"
+  );
+}
 
 const palette = {
   ULTIMATE: { border: "border-red-400", head: "bg-red-500", label: "text-red-500" },
@@ -96,12 +114,19 @@ function printNode(level, node) {
     IMMEDIATE: ["#059669", "#059669"],
     OUTPUT: ["#f59e0b", "#f59e0b"],
   }[level] || ["#2563eb", "#2563eb"];
-  return `<div class="node" style="border-color:${colors[0]};-webkit-print-color-adjust:exact;print-color-adjust:exact"><div class="head" style="background:${colors[1]};color:#fff;-webkit-print-color-adjust:exact;print-color-adjust:exact">${escapeHtml(node.title)}</div><div class="indicator">${escapeHtml(node.indicator || "Belum ada indikator")}</div></div>`;
+  const bidangBadge = level === "INTERMEDIATE" && node.bidang
+    ? `<div style="padding:4px;background:#e0edff;color:#1e40af;font-size:9px;font-weight:bold;text-transform:capitalize">Bidang ${escapeHtml(node.bidang)}</div>`
+    : "";
+  return `<div class="node" style="border-color:${colors[0]};-webkit-print-color-adjust:exact;print-color-adjust:exact"><div class="head" style="background:${colors[1]};color:#fff;-webkit-print-color-adjust:exact;print-color-adjust:exact">${escapeHtml(node.title)}</div>${bidangBadge}<div class="indicator">${escapeHtml(node.indicator || "Belum ada indikator")}</div></div>`;
 }
 
 function TreeNode({ node, level, selected, onSelect, domRef }) {
   const nodeLevel = node.level || level;
   const colors = palette[nodeLevel];
+  const bidangLabel = node.bidang
+    ? BIDANG_OPTIONS.find((b) => b.value === node.bidang)?.label || `Bidang ${node.bidang}`
+    : null;
+
   return (
     <button
       type="button"
@@ -113,6 +138,11 @@ function TreeNode({ node, level, selected, onSelect, domRef }) {
         {nodeLevel}
       </span>
       <span className={`${colors.head} min-h-[48px] px-3 py-2 text-[10px] font-extrabold leading-tight text-white`}>{node.title}</span>
+      {nodeLevel === "INTERMEDIATE" && bidangLabel && (
+        <span className="border-t border-blue-100 bg-blue-50/90 px-2 py-1 text-[9px] font-bold text-blue-800">
+          {bidangLabel}
+        </span>
+      )}
       <span className="min-h-[37px] border-t border-slate-200 px-3 py-2 text-[10px] leading-tight text-slate-600">{node.indicator || "Belum ada indikator"}</span>
       <span className="absolute -right-2 -top-2 hidden h-5 w-5 items-center justify-center rounded-full bg-blue-950 text-xs text-white group-hover:flex">✎</span>
     </button>
@@ -132,7 +162,7 @@ function TreeConnectors({ containerRef, nodeRefs, edges }) {
       const containerRect = container.getBoundingClientRect();
       const nextLines = [];
 
-      edges.forEach(({ fromId, toId }) => {
+      edges.forEach(({ fromId, toId, orthogonal }) => {
         const a = nodeRefs.current[fromId];
         const b = nodeRefs.current[toId];
         if (!a || !b) return;
@@ -140,6 +170,7 @@ function TreeConnectors({ containerRef, nodeRefs, edges }) {
         const rectB = b.getBoundingClientRect();
         nextLines.push({
           key: `${fromId}=>${toId}`,
+          orthogonal: !!orthogonal,
           x1: rectA.left + rectA.width / 2 - containerRect.left,
           y1: rectA.bottom - containerRect.top,
           x2: rectB.left + rectB.width / 2 - containerRect.left,
@@ -176,22 +207,59 @@ function TreeConnectors({ containerRef, nodeRefs, edges }) {
         </marker>
       </defs>
       {lines.map((line) => (
-        <line
-          key={line.key}
-          x1={line.x1}
-          y1={line.y1}
-          x2={line.x2}
-          y2={line.y2}
-          stroke="#94a3b8"
-          strokeWidth="1.5"
-          markerEnd="url(#tree-arrow)"
-        />
+        line.orthogonal ? (
+          <path
+            key={line.key}
+            d={`M ${line.x1} ${line.y1} L ${line.x1} ${(line.y1 + line.y2) / 2} L ${line.x2} ${(line.y1 + line.y2) / 2} L ${line.x2} ${line.y2}`}
+            fill="none"
+            stroke="#94a3b8"
+            strokeWidth="1.5"
+            markerEnd="url(#tree-arrow)"
+          />
+        ) : (
+          <line
+            key={line.key}
+            x1={line.x1}
+            y1={line.y1}
+            x2={line.x2}
+            y2={line.y2}
+            stroke="#94a3b8"
+            strokeWidth="1.5"
+            markerEnd="url(#tree-arrow)"
+          />
+        )
       ))}
     </svg>
   );
 }
 
+function getAuthHeaders(extra = {}) {
+  const token = typeof window !== "undefined" ? localStorage.getItem("e_sakip_token") : null;
+  return {
+    ...extra,
+    ...(token ? { Authorization: `Bearer ${token}` } : {}),
+  };
+}
+
 function EditablePohonKinerja() {
+  const { user } = useAuth();
+  const role = user?.role || (() => {
+    try {
+      return JSON.parse(localStorage.getItem("e_sakip_user") || "{}")?.role;
+    } catch {
+      return null;
+    }
+  })();
+  const isAdmin = role === "admin";
+  const roleLabel = {
+    admin: "Administrator",
+    komunikasi: "Bidang Komunikasi",
+    statistik: "Bidang Statistik",
+    persandian: "Bidang Persandian",
+    aplikasi: "Bidang Aplikasi",
+    kesekretariatan: "Kesekretariatan",
+  }[role] || role || "Pengguna";
+
   const [tree, setTree] = useState(initialTree);
   const [selected, setSelected] = useState({ ...initialTree, id: "ultimate", level: "ULTIMATE" });
   const [showUpload, setShowUpload] = useState(false);
@@ -199,13 +267,26 @@ function EditablePohonKinerja() {
 
   // Modal edit node (setiap perubahan langsung tersimpan ke server, tanpa tombol Simpan Perubahan)
   const [showEditModal, setShowEditModal] = useState(false);
-  const [editForm, setEditForm] = useState({ title: "", indicator: "", level: "ULTIMATE" });
+  const [editForm, setEditForm] = useState({ title: "", indicator: "", level: "ULTIMATE", bidang: "komunikasi" });
   const [savingNode, setSavingNode] = useState(false);
   const [addingNode, setAddingNode] = useState(false);
+
+  // Modal tambah node intermediate
+  const [showAddIntermediateModal, setShowAddIntermediateModal] = useState(false);
+  const [newIntermediateForm, setNewIntermediateForm] = useState({
+    title: "",
+    indicator: "",
+    bidang: "komunikasi",
+  });
+  const [addingIntermediate, setAddingIntermediate] = useState(false);
 
   // Konfirmasi hapus node
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [deletingNode, setDeletingNode] = useState(false);
+
+  // Mode lihat-saja untuk pohon kinerja yang sudah diarsipkan
+  const [isArchivedView, setIsArchivedView] = useState(false);
+  const [loadingArchivedView, setLoadingArchivedView] = useState(false);
 
   // Filter states
   const [tahun, setTahun] = useState("2026");
@@ -248,9 +329,9 @@ function EditablePohonKinerja() {
   const ultimateId = tree.id || "ultimate";
   const edges = [];
   tree.branches.forEach((branch) => {
-    edges.push({ fromId: ultimateId, toId: branch.id });
+    edges.push({ fromId: ultimateId, toId: branch.id, orthogonal: true });
     (branch.children || []).forEach((child) => {
-      edges.push({ fromId: branch.id, toId: child.id });
+      edges.push({ fromId: branch.id, toId: child.id, orthogonal: true });
       (child.children || []).forEach((output) => {
         edges.push({ fromId: child.id, toId: output.id });
       });
@@ -288,76 +369,93 @@ function EditablePohonKinerja() {
     fetchYears();
   }, []);
 
-  // Fetch tree data when tahun changes
-  useEffect(() => {
+  // Mengambil pohon kinerja aktif (bukan arsip) untuk tahun/unit kerja yang dipilih.
+  // Dipakai baik oleh effect di bawah maupun tombol "Kembali ke Tahun Aktif".
+  const loadTreeData = async () => {
     if (!tahun) return;
-    
-    const fetchTreeData = async () => {
-      setLoadingData(true);
-      setErrorData("");
-      
-      try {
-        const params = new URLSearchParams();
-        params.append("tahun", tahun);
-        if (unitKerja) {
-          params.append("unit_kerja", unitKerja);
-        }
-        
-        const response = await fetch(`http://localhost:8000/api/pohon-kinerja/tree?${params}`, {
-          method: "GET",
-          headers: {
-            Accept: "application/json",
-          },
-        });
 
-        const data = await response.json();
+    setIsArchivedView(false);
+    setLoadingData(true);
+    setErrorData("");
 
-        if (!response.ok) {
-          // Jika tahun tidak memiliki data, tampilkan button "Tambah Pohon Kinerja Baru"
-          if (response.status === 404 && data.message && data.message.includes('tidak ditemukan')) {
-            setErrorData("");
-            setTreeData(null);
-            setPohonKinerjaData(null);
-            // Cari tahun sebelumnya sebagai template, bukan tahun yang sedang dibuat
-            const targetYear = parseInt(tahun);
-            const previousYears = availableYears
-              .map(Number)
-              .filter((year) => year < targetYear);
-            const templateYear = previousYears.length > 0
-              ? Math.max(...previousYears)
-              : null;
+    try {
+      const params = new URLSearchParams();
+      params.append("tahun", tahun);
+      if (unitKerja) {
+        params.append("unit_kerja", unitKerja);
+      }
 
-            setLastAvailableYear(templateYear);
-            setNewYearForm((prev) => ({
-              ...prev,
-              tahun: targetYear,
-              unit_kerja: unitKerja || prev.unit_kerja,
-            }));
-            setLoadingData(false);
-            return;
-          }
-          setErrorData(data.error || data.message || "Gagal mengambil data");
+      const response = await fetch(`http://localhost:8000/api/pohon-kinerja/tree?${params}`, {
+        method: "GET",
+        headers: {
+          Accept: "application/json",
+        },
+      });
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        // Jika tahun tidak memiliki data, tampilkan button "Tambah Pohon Kinerja Baru"
+        if (response.status === 404 && data.message && data.message.includes('tidak ditemukan')) {
+          setErrorData("");
           setTreeData(null);
           setPohonKinerjaData(null);
+          // Cari tahun sebelumnya sebagai template, bukan tahun yang sedang dibuat
+          const targetYear = parseInt(tahun);
+          const previousYears = availableYears
+            .map(Number)
+            .filter((year) => year < targetYear);
+          const templateYear = previousYears.length > 0
+            ? Math.max(...previousYears)
+            : null;
+
+          setLastAvailableYear(templateYear);
+          setNewYearForm((prev) => ({
+            ...prev,
+            tahun: targetYear,
+            unit_kerja: unitKerja || prev.unit_kerja,
+          }));
           setLoadingData(false);
           return;
         }
-
-        // Use tree data from database directly
-        setTreeData(data.data.tree);
-        setPohonKinerjaData(data.data);
-        setTree(data.data.tree);
-        setSelected({ ...data.data.tree, id: data.data.tree.id || "ultimate", level: "ULTIMATE" });
-        setLoadingData(false);
-      } catch (err) {
-        setErrorData(err.message || "Gagal mengambil data");
+        setErrorData(data.error || data.message || "Gagal mengambil data");
         setTreeData(null);
         setPohonKinerjaData(null);
         setLoadingData(false);
+        return;
       }
-    };
 
-    fetchTreeData();
+      // Deteksi apakah data yang di-load ternyata sudah diarsipkan, supaya semua
+      // guard (edit/hapus/tambah node, tombol aksi) otomatis terkunci walau
+      // dimuat lewat alur pemilihan tahun biasa, bukan hanya lewat "Lihat Arsipan".
+      // Dicocokkan terhadap daftar arsip (endpoint /archived) karena endpoint /tree
+      // tidak selalu menyertakan flag arsip secara eksplisit.
+      const archivedList = await fetchArchivedList();
+      const isArchived = archivedList.some(
+        (item) =>
+          Number(item.tahun) === Number(data.data.tahun) &&
+          String(item.unit_kerja || "").trim().toLowerCase() ===
+            String(data.data.unit_kerja || "").trim().toLowerCase()
+      );
+
+      // Use tree data from database directly
+      setTreeData(data.data.tree);
+      setPohonKinerjaData(data.data);
+      setTree(data.data.tree);
+      setSelected({ ...data.data.tree, id: data.data.tree.id || "ultimate", level: "ULTIMATE" });
+      setIsArchivedView(isArchived);
+      setLoadingData(false);
+    } catch (err) {
+      setErrorData(err.message || "Gagal mengambil data");
+      setTreeData(null);
+      setPohonKinerjaData(null);
+      setLoadingData(false);
+    }
+  };
+
+  // Fetch tree data when tahun changes
+  useEffect(() => {
+    loadTreeData();
   }, [tahun, unitKerja]);
 
   // --- Helper murni untuk mengubah struktur tree secara lokal ---
@@ -414,13 +512,22 @@ function EditablePohonKinerja() {
   const openEditModal = (node, level) => {
     const nodeLevel = node.level || level;
     setSelected({ ...node, level: nodeLevel });
-    setEditForm({ title: node.title || "", indicator: node.indicator || "", level: nodeLevel });
+    setEditForm({
+      title: node.title || "",
+      indicator: node.indicator || "",
+      level: nodeLevel,
+      bidang: node.bidang || "komunikasi",
+    });
     setShowEditModal(true);
     setErrorData("");
   };
 
   // Menyimpan node baru langsung ke server (tanpa tombol Simpan Perubahan)
   const addNode = async (target = selected) => {
+    if (isArchivedView) {
+      setErrorData("Pohon Kinerja arsip hanya dapat dilihat. Pulihkan terlebih dahulu untuk menambah node.");
+      return;
+    }
     if (!pohonKinerjaData) {
       setErrorData("Pohon Kinerja tahun ini belum dibuat. Tambahkan Pohon Kinerja Baru terlebih dahulu.");
       return;
@@ -443,14 +550,18 @@ function EditablePohonKinerja() {
     setAddingNode(true);
     setErrorData("");
     try {
+      const rawTargetId = target.id ? String(target.id).replace(/^[a-z]+-/, "") : null;
+      const parentId = rawTargetId && !isNaN(rawTargetId) ? Number(rawTargetId) : target.id;
+
       const response = await fetch("http://localhost:8000/api/pohon-kinerja/node", {
         method: "POST",
-        headers: { Accept: "application/json", "Content-Type": "application/json" },
+        headers: getAuthHeaders({ Accept: "application/json", "Content-Type": "application/json" }),
         body: JSON.stringify({
           level: nodeLevel,
-          parent_id: target.id,
+          parent_id: parentId,
           title: defaultTitle,
           indicator: defaultIndicator,
+          ...(nodeLevel === "INTERMEDIATE" ? { bidang: "komunikasi" } : {}),
         }),
       });
       const data = await response.json();
@@ -463,6 +574,7 @@ function EditablePohonKinerja() {
         level: nodeLevel,
         title: defaultTitle,
         indicator: defaultIndicator,
+        ...(nodeLevel === "INTERMEDIATE" ? { bidang: data.data.bidang || "komunikasi" } : {}),
         children: [],
       };
 
@@ -475,13 +587,87 @@ function EditablePohonKinerja() {
       setAddingNode(false);
     }
   };
-  const addIntermediate = () => addNode({ ...tree, id: tree.id || "ultimate", level: "ULTIMATE" });
+
+  // Buka modal untuk menambah Intermediate secara terstruktur (memilih bidang, sasaran, indikator)
+  const handleOpenAddIntermediate = () => {
+    if (isArchivedView) {
+      setErrorData("Pohon Kinerja arsip hanya dapat dilihat. Pulihkan terlebih dahulu untuk menambah node.");
+      return;
+    }
+    if (!pohonKinerjaData?.pohon_kinerja_id) {
+      setErrorData("Pohon Kinerja tahun ini belum dibuat. Tambahkan Pohon Kinerja Baru terlebih dahulu.");
+      return;
+    }
+    setNewIntermediateForm({
+      title: "",
+      indicator: "",
+      bidang: "komunikasi",
+    });
+    setShowAddIntermediateModal(true);
+    setErrorData("");
+  };
+
+  // Submit penambahan node Intermediate dari modal
+  const handleAddIntermediateSubmit = async () => {
+    if (!newIntermediateForm.title.trim()) {
+      setErrorData("Tujuan / Sasaran Intermediate wajib diisi.");
+      return;
+    }
+    setAddingIntermediate(true);
+    setErrorData("");
+    try {
+      const rawUltimateId = tree?.id ? String(tree.id).replace(/^[a-z]+-/, "") : null;
+      const parentId = rawUltimateId && !isNaN(rawUltimateId) ? Number(rawUltimateId) : pohonKinerjaData.pohon_kinerja_id;
+
+      const response = await fetch("http://localhost:8000/api/pohon-kinerja/node", {
+        method: "POST",
+        headers: getAuthHeaders({ Accept: "application/json", "Content-Type": "application/json" }),
+        body: JSON.stringify({
+          level: "INTERMEDIATE",
+          pohon_kinerja_id: pohonKinerjaData.pohon_kinerja_id,
+          parent_id: parentId,
+          title: newIntermediateForm.title.trim(),
+          indicator: newIntermediateForm.indicator.trim() || "Tambahkan indikator",
+          bidang: newIntermediateForm.bidang,
+        }),
+      });
+      const data = await response.json();
+      if (!response.ok) {
+        throw new Error(data.message || "Gagal menambahkan node Intermediate.");
+      }
+
+      const newNode = {
+        id: `intermediate-${data.data.id}`,
+        level: "INTERMEDIATE",
+        title: data.data.sasaran || newIntermediateForm.title.trim(),
+        indicator: data.data.indikator_sasaran || newIntermediateForm.indicator.trim() || "Tambahkan indikator",
+        bidang: data.data.bidang || newIntermediateForm.bidang,
+        children: [],
+      };
+
+      setTree((current) => ({
+        ...current,
+        branches: [...(current.branches || []), newNode],
+      }));
+      setShowAddIntermediateModal(false);
+    } catch (error) {
+      setErrorData(error.message || "Gagal menambahkan node Intermediate.");
+    } finally {
+      setAddingIntermediate(false);
+    }
+  };
+
+  const addIntermediate = handleOpenAddIntermediate;
 
   const addImmediate = (target) => addNode({ ...target, level: "INTERMEDIATE" });
 
-  // Menyimpan perubahan judul/indikator node yang sedang dibuka di modal, langsung ke server.
+  // Menyimpan perubahan judul/indikator/bidang node yang sedang dibuka di modal, langsung ke server.
   const saveNodeEdit = async () => {
     if (!selected?.id) return;
+    if (isArchivedView) {
+      setErrorData("Pohon Kinerja arsip hanya dapat dilihat. Pulihkan terlebih dahulu untuk mengedit.");
+      return;
+    }
     setSavingNode(true);
     setErrorData("");
     try {
@@ -491,10 +677,15 @@ function EditablePohonKinerja() {
         if (!level || !Number.isInteger(id)) {
           throw new Error("ID node tidak valid.");
         }
+        const payload = {
+          title: editForm.title || "",
+          indicator: editForm.indicator || "",
+          ...(selected.level === "INTERMEDIATE" ? { bidang: editForm.bidang || "komunikasi" } : {}),
+        };
         const response = await fetch(`http://localhost:8000/api/pohon-kinerja/node/${level}/${id}`, {
           method: "PUT",
-          headers: { Accept: "application/json", "Content-Type": "application/json" },
-          body: JSON.stringify({ title: editForm.title || "", indicator: editForm.indicator || "" }),
+          headers: getAuthHeaders({ Accept: "application/json", "Content-Type": "application/json" }),
+          body: JSON.stringify(payload),
         });
         const data = await response.json();
         if (!response.ok) {
@@ -502,11 +693,14 @@ function EditablePohonKinerja() {
         }
       }
 
-      setTree((current) => patchNodeInTree(current, selected.id, {
+      const patch = {
         title: editForm.title,
         indicator: editForm.indicator,
-      }));
-      setSelected((current) => ({ ...current, title: editForm.title, indicator: editForm.indicator }));
+        ...(selected.level === "INTERMEDIATE" ? { bidang: editForm.bidang } : {}),
+      };
+
+      setTree((current) => patchNodeInTree(current, selected.id, patch));
+      setSelected((current) => ({ ...current, ...patch }));
       setShowEditModal(false);
     } catch (error) {
       setErrorData(error.message || "Gagal menyimpan perubahan");
@@ -518,6 +712,10 @@ function EditablePohonKinerja() {
   // Meminta konfirmasi sebelum node benar-benar dihapus.
   const requestDeleteNode = () => {
     if (selected.level === "ULTIMATE") return;
+    if (isArchivedView) {
+      setErrorData("Pohon Kinerja arsip hanya dapat dilihat. Pulihkan terlebih dahulu untuk menghapus.");
+      return;
+    }
     setShowDeleteConfirm(true);
   };
 
@@ -539,7 +737,7 @@ function EditablePohonKinerja() {
 
       const response = await fetch(`http://localhost:8000/api/pohon-kinerja/node/${level}/${id}`, {
         method: "DELETE",
-        headers: { Accept: "application/json" },
+        headers: getAuthHeaders({ Accept: "application/json" }),
       });
       const data = await response.json();
       if (!response.ok) {
@@ -571,7 +769,7 @@ function EditablePohonKinerja() {
     try {
       const response = await fetch(
         `http://localhost:8000/api/pohon-kinerja/archive/${pohonKinerjaData.pohon_kinerja_id}`,
-        { method: "POST", headers: { Accept: "application/json" } }
+        { method: "POST", headers: getAuthHeaders({ Accept: "application/json" }) }
       );
 
       const data = await response.json();
@@ -606,8 +804,9 @@ function EditablePohonKinerja() {
       setArchivingId(null);
     }
   };
-  const fetchArchivedData = async () => {
-    setLoadingArchived(true);
+  // Mengambil daftar arsip dan mengembalikannya (selain menyimpan ke state),
+  // supaya bisa langsung dipakai untuk mencocokkan status arsip tahun yang sedang dimuat.
+  const fetchArchivedList = async () => {
     try {
       const response = await fetch('http://localhost:8000/api/pohon-kinerja/archived', {
         method: 'GET',
@@ -617,18 +816,53 @@ function EditablePohonKinerja() {
       });
 
       const data = await response.json();
-
-      if (response.ok) {
-        setArchivedData(data.data || []);
-      } else {
-        setArchivedData([]);
-      }
+      const list = response.ok ? (data.data || []) : [];
+      setArchivedData(list);
+      return list;
     } catch (err) {
       console.error('Failed to fetch archived data:', err);
       setArchivedData([]);
-    } finally {
-      setLoadingArchived(false);
+      return [];
     }
+  };
+
+  const fetchArchivedData = async () => {
+    setLoadingArchived(true);
+    await fetchArchivedList();
+    setLoadingArchived(false);
+  };
+
+  // Memuat pohon kinerja arsip apa adanya (hanya-lihat), tanpa mengubah data aktif.
+  const handleViewArchived = async (id) => {
+    setLoadingArchivedView(true);
+    setErrorData("");
+    try {
+      const response = await fetch(`http://localhost:8000/api/pohon-kinerja/archived/${id}`, {
+        method: "GET",
+        headers: { Accept: "application/json" },
+      });
+
+      const data = await response.json();
+      if (!response.ok) {
+        throw new Error(data.message || "Gagal memuat data arsip");
+      }
+
+      setTreeData(data.data.tree);
+      setPohonKinerjaData(data.data);
+      setTree(data.data.tree);
+      setSelected({ ...data.data.tree, id: data.data.tree.id || "ultimate", level: "ULTIMATE" });
+      setIsArchivedView(true);
+      setShowArchivedList(false);
+    } catch (error) {
+      setErrorData(error.message || "Gagal memuat data arsip");
+    } finally {
+      setLoadingArchivedView(false);
+    }
+  };
+
+  // Keluar dari mode lihat-arsip dan memuat ulang pohon kinerja aktif untuk tahun yang dipilih.
+  const handleBackToActive = () => {
+    loadTreeData();
   };
 
   const handleRestore = async (id) => {
@@ -638,9 +872,9 @@ function EditablePohonKinerja() {
         `http://localhost:8000/api/pohon-kinerja/restore/${id}`,
         {
           method: "POST",
-          headers: {
+          headers: getAuthHeaders({
             Accept: "application/json",
-          },
+          }),
         }
       );
 
@@ -676,10 +910,10 @@ function EditablePohonKinerja() {
         "http://localhost:8000/api/pohon-kinerja/duplicate",
         {
           method: "POST",
-          headers: {
+          headers: getAuthHeaders({
             Accept: "application/json",
             "Content-Type": "application/json",
-          },
+          }),
           body: JSON.stringify({
             tahun_baru: Number(newYearForm.tahun),
             unit_kerja: newYearForm.unit_kerja,
@@ -766,19 +1000,21 @@ function EditablePohonKinerja() {
                 Export PDF
               </button>
 
-              <button
-                type="button"
-                onClick={() => {
-                  setShowActionMenu(false);
-                  setShowUpload(true);
-                }}
-                className="flex w-full items-center gap-3 px-4 py-3 text-left text-sm text-slate-700 hover:bg-blue-50 hover:text-blue-700"
-              >
-                <span className="material-symbols-outlined text-[19px]">upload</span>
-                Upload File
-              </button>
+              {!isArchivedView && isAdmin && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowActionMenu(false);
+                    setShowUpload(true);
+                  }}
+                  className="flex w-full items-center gap-3 px-4 py-3 text-left text-sm text-slate-700 hover:bg-blue-50 hover:text-blue-700"
+                >
+                  <span className="material-symbols-outlined text-[19px]">upload</span>
+                  Upload File
+                </button>
+              )}
 
-              {pohonKinerjaData && (
+              {pohonKinerjaData && !isArchivedView && isAdmin && (
                 <>
                   <div className="my-1 border-t border-slate-100" />
 
@@ -814,18 +1050,20 @@ function EditablePohonKinerja() {
           )}
         </div>
 
-        {/* Tambah Intermediate tetap terpisah, hanya warna diubah menjadi biru */}
-        <button
-          type="button"
-          onClick={addIntermediate}
-          disabled={addingNode}
-          className="flex items-center gap-2 rounded bg-blue-600 px-4 py-2 font-semibold text-white shadow-sm transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
-        >
-          <span className="material-symbols-outlined text-[18px]">
-            {addingNode ? "hourglass_empty" : "add"}
-          </span>
-          {addingNode ? "Menambahkan..." : "Tambah Intermediate"}
-        </button>
+        {/* Tambah Intermediate khusus admin */}
+        {!isArchivedView && isAdmin && (
+          <button
+            type="button"
+            onClick={addIntermediate}
+            disabled={addingNode || addingIntermediate}
+            className="flex items-center gap-2 rounded bg-blue-600 px-4 py-2 font-semibold text-white shadow-sm transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            <span className="material-symbols-outlined text-[18px]">
+              {addingIntermediate ? "hourglass_empty" : "add"}
+            </span>
+            {addingIntermediate ? "Menambahkan..." : "Tambah Intermediate"}
+          </button>
+        )}
 
       </div>
       <div className="mb-8 rounded-lg border border-slate-300 bg-white p-6 shadow-sm"><div className="grid grid-cols-1 gap-4 md:grid-cols-4">
@@ -873,6 +1111,25 @@ function EditablePohonKinerja() {
         </div>
       )}
 
+      {isArchivedView && (
+        <div className="mb-8 flex flex-wrap items-center justify-between gap-3 rounded-lg border border-amber-300 bg-amber-50 p-4">
+          <div className="flex items-center gap-2 text-amber-900">
+            <span className="material-symbols-outlined">visibility</span>
+            <p className="text-sm font-semibold">
+              Mode hanya-lihat &middot; Pohon Kinerja arsip tahun {pohonKinerjaData?.tahun} tidak dapat diedit, dihapus, atau ditambah node baru.
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={handleBackToActive}
+            className="flex items-center gap-2 rounded border border-amber-700 px-3 py-1.5 text-sm font-semibold text-amber-800 hover:bg-amber-100"
+          >
+            <span className="material-symbols-outlined text-[18px]">arrow_back</span>
+            Kembali ke Tahun Aktif
+          </button>
+        </div>
+      )}
+
       {pohonKinerjaData && (
         <div className="mb-8 rounded-lg border border-green-300 bg-green-50 p-4">
           <p className="text-green-900 font-semibold">Data Terimport:</p>
@@ -887,7 +1144,7 @@ function EditablePohonKinerja() {
         className="w-full min-w-0 overflow-auto rounded-xl border border-slate-300 bg-[#f7fbff] shadow-sm"
       >
         <div className="min-w-max p-4 md:p-5">
-          {/* Tampilkan button "Tambah Pohon Kinerja Baru" ketika tahun tidak memiliki data */}
+          {/* Tampilkan button "Tambah Pohon Kinerja Baru" ketika tahun tidak memiliki data (Khusus Admin) */}
           {!pohonKinerjaData && lastAvailableYear && (
             <div className="mb-8 flex flex-col items-center justify-center py-12">
               <span className="material-symbols-outlined text-6xl text-slate-300 mb-4">
@@ -895,24 +1152,28 @@ function EditablePohonKinerja() {
               </span>
               <h2 className="text-2xl font-bold text-slate-700 mb-2">Pohon Kinerja Tahun {tahun}</h2>
               <p className="text-slate-500 mb-6 max-w-md text-center">
-                Tahun {tahun} belum memiliki data Pohon Kinerja. Klik tombol di bawah untuk membuat Pohon Kinerja baru dengan template dari tahun {lastAvailableYear}.
+                {isAdmin
+                  ? `Tahun ${tahun} belum memiliki data Pohon Kinerja. Klik tombol di bawah untuk membuat Pohon Kinerja baru dengan template dari tahun ${lastAvailableYear}.`
+                  : `Tahun ${tahun} belum memiliki data Pohon Kinerja.`}
               </p>
-              <button
-                type="button"
-                onClick={() => {
-                  setNewYearForm({
-                    tahun: parseInt(tahun),
-                    unit_kerja: "DINAS KOMUNIKASI DAN INFORMATIKA",
-                  });
-                  setShowCreateNewModal(true);
-                }}
-                className="flex items-center gap-3 rounded-lg bg-blue-600 px-8 py-4 font-semibold text-white shadow-lg hover:bg-blue-700 transition"
-              >
-                <span className="material-symbols-outlined text-[24px]">
-                  add_circle
-                </span>
-                Tambah Pohon Kinerja Baru
-              </button>
+              {isAdmin && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setNewYearForm({
+                      tahun: parseInt(tahun),
+                      unit_kerja: "DINAS KOMUNIKASI DAN INFORMATIKA",
+                    });
+                    setShowCreateNewModal(true);
+                  }}
+                  className="flex items-center gap-3 rounded-lg bg-blue-600 px-8 py-4 font-semibold text-white shadow-lg hover:bg-blue-700 transition"
+                >
+                  <span className="material-symbols-outlined text-[24px]">
+                    add_circle
+                  </span>
+                  Tambah Pohon Kinerja Baru
+                </button>
+              )}
             </div>
           )}
 
@@ -1007,40 +1268,44 @@ function EditablePohonKinerja() {
                                 </div>
                               )}
 
-                              {/* Tambah Output untuk Immediate ini */}
-                              <button
-                                type="button"
-                                onClick={() =>
-                                  addNode({
-                                    ...child,
-                                    level: "IMMEDIATE",
-                                  })
-                                }
-                                disabled={addingNode}
-                                className="mb-1 mt-3 flex print:hidden items-center gap-1 text-xs font-bold text-amber-700 hover:text-amber-900 disabled:cursor-not-allowed disabled:opacity-50"
-                              >
-                                <span className="material-symbols-outlined text-[16px]">
-                                  add_circle
-                                </span>
-                                Tambah Output
-                              </button>
+                              {/* Tambah Output untuk Immediate ini (Khusus Admin) */}
+                              {!isArchivedView && isAdmin && (
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    addNode({
+                                      ...child,
+                                      level: "IMMEDIATE",
+                                    })
+                                  }
+                                  disabled={addingNode}
+                                  className="mb-1 mt-3 flex print:hidden items-center gap-1 text-xs font-bold text-amber-700 hover:text-amber-900 disabled:cursor-not-allowed disabled:opacity-50"
+                                >
+                                  <span className="material-symbols-outlined text-[16px]">
+                                    add_circle
+                                  </span>
+                                  Tambah Output
+                                </button>
+                              )}
                             </div>
                           ))}
                         </div>
                       )}
 
-                      {/* Tambah Immediate untuk Intermediate ini */}
-                      <button
-                        type="button"
-                        onClick={() => addImmediate(branch)}
-                        disabled={addingNode}
-                        className="mt-5 mb-4 flex print:hidden items-center gap-1 text-xs font-bold text-blue-700 hover:text-blue-950 disabled:cursor-not-allowed disabled:opacity-50"
-                      >
-                        <span className="material-symbols-outlined text-[16px]">
-                          add_circle
-                        </span>
-                        Tambah Immediate
-                      </button>
+                      {/* Tambah Immediate untuk Intermediate ini (Khusus Admin) */}
+                      {!isArchivedView && isAdmin && (
+                        <button
+                          type="button"
+                          onClick={() => addImmediate(branch)}
+                          disabled={addingNode}
+                          className="mt-5 mb-4 flex print:hidden items-center gap-1 text-xs font-bold text-blue-700 hover:text-blue-950 disabled:cursor-not-allowed disabled:opacity-50"
+                        >
+                          <span className="material-symbols-outlined text-[16px]">
+                            add_circle
+                          </span>
+                          Tambah Immediate
+                        </button>
+                      )}
                     </div>
                   ))}
                 </div>
@@ -1059,7 +1324,9 @@ function EditablePohonKinerja() {
           <div className="flex items-start justify-between border-b border-slate-200 p-6">
             <div>
               <p className="text-xs font-bold uppercase tracking-widest text-blue-700">
-                {selected.level === "ULTIMATE" ? "Edit Ultimate" : "Editor Node"}
+                {isArchivedView
+                  ? "Lihat Node (Arsip)"
+                  : selected.level === "ULTIMATE" ? "Edit Ultimate" : "Editor Node"}
               </p>
               <h2 className="mt-1 text-xl font-bold text-slate-900">{selected.level}</h2>
             </div>
@@ -1080,12 +1347,43 @@ function EditablePohonKinerja() {
               </div>
             )}
 
+            {isArchivedView && (
+              <div className="rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm text-amber-800">
+                Node arsip ini hanya dapat dilihat. Pulihkan pohon kinerja ini terlebih dahulu untuk mengeditnya.
+              </div>
+            )}
+
+            {!isArchivedView && !isAdmin && (
+              <div className="rounded-lg border border-blue-200 bg-blue-50 p-3 text-sm text-blue-800">
+                Mode lihat-saja: Peran Anda ({getRoleLabel(role)}) hanya dapat melihat detail node ini. Perubahan struktur hanya dapat dilakukan oleh Administrator.
+              </div>
+            )}
+
+            {selected.level === "INTERMEDIATE" && (
+              <label className="flex flex-col gap-1 text-xs font-semibold uppercase tracking-wider text-slate-500">
+                Bidang
+                <select
+                  value={editForm.bidang || "komunikasi"}
+                  onChange={(event) => setEditForm((current) => ({ ...current, bidang: event.target.value }))}
+                  disabled={isArchivedView || !isAdmin || savingNode || deletingNode}
+                  className="rounded border border-slate-300 bg-white p-2 text-sm font-normal normal-case tracking-normal text-slate-700 outline-none focus:border-blue-950 disabled:bg-slate-100 disabled:cursor-not-allowed"
+                >
+                  {BIDANG_OPTIONS.map((opt) => (
+                    <option key={opt.value} value={opt.value}>
+                      {opt.label}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            )}
+
             <label className="flex flex-col gap-1 text-xs font-semibold uppercase tracking-wider text-slate-500">
               Tujuan / Sasaran
               <textarea
                 value={editForm.title}
                 onChange={(event) => setEditForm((current) => ({ ...current, title: event.target.value }))}
                 rows="4"
+                readOnly={isArchivedView || !isAdmin}
                 disabled={savingNode || deletingNode}
                 className="resize-y rounded border border-slate-300 p-2 text-sm font-normal normal-case tracking-normal text-slate-700 outline-none focus:border-blue-950 disabled:bg-slate-100"
               />
@@ -1097,7 +1395,125 @@ function EditablePohonKinerja() {
                 value={editForm.indicator}
                 onChange={(event) => setEditForm((current) => ({ ...current, indicator: event.target.value }))}
                 rows="3"
+                readOnly={isArchivedView || !isAdmin}
                 disabled={savingNode || deletingNode}
+                className="resize-y rounded border border-slate-300 p-2 text-sm font-normal normal-case tracking-normal text-slate-700 outline-none focus:border-blue-950 disabled:bg-slate-100"
+              />
+            </label>
+          </div>
+
+          <div className="flex gap-3 border-t border-slate-200 bg-slate-50 p-6">
+            {isArchivedView || !isAdmin ? (
+              <button
+                type="button"
+                onClick={() => setShowEditModal(false)}
+                className="ml-auto rounded bg-blue-950 px-4 py-2 text-sm font-semibold text-white hover:bg-blue-900"
+              >
+                Tutup
+              </button>
+            ) : (
+              <>
+                <button
+                  type="button"
+                  onClick={requestDeleteNode}
+                  disabled={selected.level === "ULTIMATE" || savingNode || deletingNode}
+                  className="flex items-center justify-center gap-1 rounded border border-red-800 px-4 py-2 text-sm font-semibold text-red-800 hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-40"
+                >
+                  <span className="material-symbols-outlined text-[17px]">delete</span>
+                  Hapus
+                </button>
+                <div className="flex-1" />
+                <button
+                  type="button"
+                  onClick={() => setShowEditModal(false)}
+                  disabled={savingNode || deletingNode}
+                  className="rounded border border-slate-300 px-4 py-2 text-sm font-semibold text-slate-600 hover:bg-white disabled:opacity-50"
+                >
+                  Batal
+                </button>
+                <button
+                  type="button"
+                  onClick={saveNodeEdit}
+                  disabled={savingNode || deletingNode}
+                  className="flex items-center justify-center gap-1 rounded bg-blue-950 px-4 py-2 text-sm font-semibold text-white hover:bg-blue-900 disabled:opacity-50"
+                >
+                  <span className="material-symbols-outlined text-[17px]">save</span>
+                  {savingNode ? "Menyimpan..." : "Simpan"}
+                </button>
+              </>
+            )}
+          </div>
+        </div>
+      </div>
+    )}
+
+    {showAddIntermediateModal && (
+      <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+        <div className="w-full max-w-lg rounded-xl bg-white shadow-2xl">
+          <div className="flex items-start justify-between border-b border-slate-200 p-6">
+            <div>
+              <p className="text-xs font-bold uppercase tracking-widest text-blue-700">Tambah Node</p>
+              <h2 className="mt-1 text-xl font-bold text-slate-900">INTERMEDIATE</h2>
+            </div>
+            <button
+              type="button"
+              onClick={() => setShowAddIntermediateModal(false)}
+              disabled={addingIntermediate}
+              className="text-slate-400 hover:text-red-600 disabled:opacity-50"
+            >
+              <span className="material-symbols-outlined">close</span>
+            </button>
+          </div>
+
+          <div className="space-y-4 p-6">
+            {errorData && (
+              <div className="rounded-lg border border-red-300 bg-red-50 p-3 text-sm text-red-800">
+                {errorData}
+              </div>
+            )}
+
+            <label className="flex flex-col gap-1 text-xs font-semibold uppercase tracking-wider text-slate-500">
+              Bidang
+              <select
+                value={newIntermediateForm.bidang}
+                onChange={(event) =>
+                  setNewIntermediateForm((current) => ({ ...current, bidang: event.target.value }))
+                }
+                disabled={addingIntermediate}
+                className="rounded border border-slate-300 bg-white p-2 text-sm font-normal normal-case tracking-normal text-slate-700 outline-none focus:border-blue-950 disabled:bg-slate-100"
+              >
+                {BIDANG_OPTIONS.map((opt) => (
+                  <option key={opt.value} value={opt.value}>
+                    {opt.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+
+            <label className="flex flex-col gap-1 text-xs font-semibold uppercase tracking-wider text-slate-500">
+              Tujuan / Sasaran
+              <textarea
+                value={newIntermediateForm.title}
+                onChange={(event) =>
+                  setNewIntermediateForm((current) => ({ ...current, title: event.target.value }))
+                }
+                rows="4"
+                placeholder="Masukkan sasaran intermediate..."
+                disabled={addingIntermediate}
+                className="resize-y rounded border border-slate-300 p-2 text-sm font-normal normal-case tracking-normal text-slate-700 outline-none focus:border-blue-950 disabled:bg-slate-100"
+              />
+            </label>
+
+            <label className="flex flex-col gap-1 text-xs font-semibold uppercase tracking-wider text-slate-500">
+              Indikator Sasaran
+              <textarea
+                value={newIntermediateForm.indicator}
+                onChange={(event) =>
+                  setNewIntermediateForm((current) => ({ ...current, indicator: event.target.value }))
+                }
+                rows="3"
+                placeholder="Masukkan indikator sasaran..."
+                disabled={addingIntermediate}
                 className="resize-y rounded border border-slate-300 p-2 text-sm font-normal normal-case tracking-normal text-slate-700 outline-none focus:border-blue-950 disabled:bg-slate-100"
               />
             </label>
@@ -1106,30 +1522,20 @@ function EditablePohonKinerja() {
           <div className="flex gap-3 border-t border-slate-200 bg-slate-50 p-6">
             <button
               type="button"
-              onClick={requestDeleteNode}
-              disabled={selected.level === "ULTIMATE" || savingNode || deletingNode}
-              className="flex items-center justify-center gap-1 rounded border border-red-800 px-4 py-2 text-sm font-semibold text-red-800 hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-40"
-            >
-              <span className="material-symbols-outlined text-[17px]">delete</span>
-              Hapus
-            </button>
-            <div className="flex-1" />
-            <button
-              type="button"
-              onClick={() => setShowEditModal(false)}
-              disabled={savingNode || deletingNode}
-              className="rounded border border-slate-300 px-4 py-2 text-sm font-semibold text-slate-600 hover:bg-white disabled:opacity-50"
+              onClick={() => setShowAddIntermediateModal(false)}
+              disabled={addingIntermediate}
+              className="ml-auto rounded border border-slate-300 px-4 py-2 text-sm font-semibold text-slate-600 hover:bg-white disabled:opacity-50"
             >
               Batal
             </button>
             <button
               type="button"
-              onClick={saveNodeEdit}
-              disabled={savingNode || deletingNode}
-              className="flex items-center justify-center gap-1 rounded bg-blue-950 px-4 py-2 text-sm font-semibold text-white hover:bg-blue-900 disabled:opacity-50"
+              onClick={handleAddIntermediateSubmit}
+              disabled={addingIntermediate}
+              className="flex items-center justify-center gap-1 rounded bg-blue-600 px-4 py-2 text-sm font-semibold text-white hover:bg-blue-700 disabled:opacity-50"
             >
-              <span className="material-symbols-outlined text-[17px]">save</span>
-              {savingNode ? "Menyimpan..." : "Simpan"}
+              <span className="material-symbols-outlined text-[17px]">add_circle</span>
+              {addingIntermediate ? "Menyimpan..." : "Tambah Intermediate"}
             </button>
           </div>
         </div>
@@ -1248,17 +1654,32 @@ function EditablePohonKinerja() {
                         Diarsipkan: {new Date(item.archived_at).toLocaleString('id-ID')}
                       </p>
                     </div>
-                    <button
-                      type="button"
-                      onClick={() => handleRestore(item.id)}
-                      disabled={archivingId !== null}
-                      className="ml-4 flex items-center gap-2 rounded bg-blue-600 px-4 py-2 text-sm font-semibold text-white hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed whitespace-nowrap"
-                    >
-                      <span className="material-symbols-outlined text-[18px]">
-                        restore
-                      </span>
-                      {archivingId === item.id ? "Memproses..." : "Pulihkan"}
-                    </button>
+                    <div className="ml-4 flex flex-col gap-2">
+                      <button
+                        type="button"
+                        onClick={() => handleViewArchived(item.id)}
+                        disabled={archivingId !== null || loadingArchivedView}
+                        className="flex items-center gap-2 rounded border border-blue-600 px-4 py-2 text-sm font-semibold text-blue-600 hover:bg-blue-50 disabled:opacity-50 disabled:cursor-not-allowed whitespace-nowrap"
+                      >
+                        <span className="material-symbols-outlined text-[18px]">
+                          visibility
+                        </span>
+                        {loadingArchivedView ? "Memuat..." : "Lihat"}
+                      </button>
+                      {isAdmin && (
+                        <button
+                          type="button"
+                          onClick={() => handleRestore(item.id)}
+                          disabled={archivingId !== null || loadingArchivedView}
+                          className="flex items-center gap-2 rounded bg-blue-600 px-4 py-2 text-sm font-semibold text-white hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed whitespace-nowrap"
+                        >
+                          <span className="material-symbols-outlined text-[18px]">
+                            restore
+                          </span>
+                          {archivingId === item.id ? "Memproses..." : "Pulihkan"}
+                        </button>
+                      )}
+                    </div>
                   </div>
                 ))}
               </div>
@@ -1381,6 +1802,7 @@ function UploadModal({ onClose, onUploadSuccess }) {
     try {
       const response = await fetch("http://localhost:8000/api/pohon-kinerja/upload", {
         method: "POST",
+        headers: getAuthHeaders({ Accept: "application/json" }),
         body: formData,
       });
 
