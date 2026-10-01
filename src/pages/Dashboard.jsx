@@ -237,22 +237,26 @@ export default function Dashboard() {
   }, [activeYear]);
 
   /* =======================================================
-     CAPAIAN KINERJA PER TRIWULAN — rata-rata persentase
-     capaian TW I-IV, ikut activeYear, auto-refresh juga.
+     CAPAIAN KINERJA PER INTERMEDIATE — satu bar per
+     Intermediate (Intermediate 1, 2, 3, dst), persentasenya
+     ambil langsung dari "rata_rata_persentase" tiap
+     Intermediate (field yang sama dengan kolom "% Capaian"
+     di tabel Capaian Kinerja). Ikut activeYear, auto-refresh
+     juga seperti bagian lain.
   ======================================================= */
 
-  const [quarters, setQuarters] = useState([]);
-  const [quartersStatus, setQuartersStatus] = useState("loading");
+  const [intermediateCapaian, setIntermediateCapaian] = useState([]);
+  const [intermediateCapaianStatus, setIntermediateCapaianStatus] = useState("loading");
 
   useEffect(() => {
     let cancelled = false;
 
-    async function fetchQuarters() {
+    async function fetchIntermediateCapaian() {
       try {
         const token = localStorage.getItem("e_sakip_token");
 
         const response = await fetch(
-          `${API_BASE_URL}/api/capaian/quarterly-summary?tahun=${activeYear}`,
+          `${API_BASE_URL}/api/capaian?tahun=${activeYear}`,
           {
             headers: token ? { Authorization: `Bearer ${token}` } : {},
           }
@@ -265,21 +269,21 @@ export default function Dashboard() {
         const json = await response.json();
 
         if (!cancelled) {
-          setQuarters(json.data?.quarters ?? []);
-          setQuartersStatus("success");
+          setIntermediateCapaian(json.data?.intermediates ?? []);
+          setIntermediateCapaianStatus("success");
         }
       } catch (error) {
         if (!cancelled) {
-          console.error("Gagal mengambil capaian per triwulan:", error);
-          setQuartersStatus("error");
+          console.error("Gagal mengambil capaian per intermediate:", error);
+          setIntermediateCapaianStatus("error");
         }
       }
     }
 
-    setQuartersStatus("loading");
-    fetchQuarters();
+    setIntermediateCapaianStatus("loading");
+    fetchIntermediateCapaian();
 
-    const intervalId = setInterval(fetchQuarters, AUTO_REFRESH_INTERVAL_MS);
+    const intervalId = setInterval(fetchIntermediateCapaian, AUTO_REFRESH_INTERVAL_MS);
 
     return () => {
       cancelled = true;
@@ -485,33 +489,39 @@ export default function Dashboard() {
             </div>
           </div>
 
-          {/* ================= CAPAIAN KINERJA PER TRIWULAN ================= */}
+          {/* ================= CAPAIAN KINERJA PER INTERMEDIATE ================= */}
           <div className="bg-white border border-[#E2E8F0] rounded-xl shadow-sm">
             <div className="flex items-center justify-between p-4 border-b border-[#E2E8F0]">
               <div>
                 <h2 className="text-lg md:text-xl font-semibold text-[#0B1C30]">
-                  Capaian Kinerja per Triwulan
+                  Capaian Kinerja per Sasaran (Intermediate)
                 </h2>
                 <p className="text-xs text-[#737780] mt-0.5">
-                  Rata-rata persentase capaian seluruh sasaran, tahun {activeYear}
+                  Persentase capaian tiap Intermediate, tahun {activeYear}
                 </p>
               </div>
             </div>
 
             <div className="p-5 md:p-6">
-              {quartersStatus === "loading" && (
+              {intermediateCapaianStatus === "loading" && (
                 <p className="text-sm text-[#737780] text-center py-10">
                   Memuat data capaian...
                 </p>
               )}
 
-              {quartersStatus === "error" && (
+              {intermediateCapaianStatus === "error" && (
                 <p className="text-sm text-[#93000A] text-center py-10">
-                  Gagal memuat data capaian per triwulan.
+                  Gagal memuat data capaian per Intermediate.
                 </p>
               )}
 
-              {quartersStatus === "success" && (
+              {intermediateCapaianStatus === "success" && intermediateCapaian.length === 0 && (
+                <p className="text-sm text-[#737780] text-center py-10">
+                  Belum ada data Intermediate untuk tahun {activeYear}.
+                </p>
+              )}
+
+              {intermediateCapaianStatus === "success" && intermediateCapaian.length > 0 && (
                 <>
                   <div className="relative h-[220px] pl-8">
                     {/* Gridline & label sumbu Y (0/25/50/75/100/125/150%) */}
@@ -536,42 +546,37 @@ export default function Dashboard() {
                       ))}
                     </div>
 
-                    {/* Bar per triwulan */}
-                    <div className="relative h-full flex items-end justify-around gap-3 md:gap-6 px-2">
-                      {quarters.map((quarter) => {
-                        const value = quarter.rata_rata_persentase;
-                        const filled = value !== null && value !== undefined;
+                    {/* Bar per Intermediate */}
+                    <div className="relative h-full flex items-end justify-around gap-3 md:gap-6 px-2 overflow-x-auto">
+                      {intermediateCapaian.map((item, index) => {
+                        const value = item.rata_rata_persentase ?? 0;
 
                         // Traffic-light: hijau (tercapai) / kuning (mendekati) / merah (kurang)
-                        const barColor = !filled
-                          ? "bg-[#E2E8F0]"
-                          : value >= 100
-                          ? "bg-emerald-500"
-                          : value >= 75
-                          ? "bg-amber-400"
-                          : "bg-red-400";
+                        const barColor =
+                          value >= 100
+                            ? "bg-emerald-500"
+                            : value >= 75
+                            ? "bg-amber-400"
+                            : "bg-red-400";
 
-                        const heightPercent = filled
-                          ? Math.min((value / 150) * 100, 100)
-                          : 3;
+                        const heightPercent = Math.max(
+                          Math.min((value / 150) * 100, 100),
+                          2
+                        );
 
                         return (
                           <div
-                            key={quarter.periode}
-                            className="h-full flex flex-col items-center justify-end gap-1.5 flex-1 max-w-[80px]"
+                            key={item.id}
+                            className="h-full flex flex-col items-center justify-end gap-1.5 flex-1 min-w-[56px] max-w-[80px]"
                           >
                             <span className="text-xs font-bold text-[#0B1C30]">
-                              {filled ? `${value}%` : "-"}
+                              {value}%
                             </span>
 
                             <div
                               className={`w-full rounded-t-md transition-all ${barColor}`}
                               style={{ height: `${heightPercent}%` }}
-                              title={
-                                filled
-                                  ? `${quarter.nama}: ${value}% (${quarter.jumlah_intermediate_terisi} sasaran terisi)`
-                                  : `${quarter.nama}: belum ada data`
-                              }
+                              title={`${item.sasaran}: ${value}%`}
                             />
                           </div>
                         );
@@ -579,30 +584,19 @@ export default function Dashboard() {
                     </div>
                   </div>
 
-                  {/* Label triwulan di bawah chart */}
-                  <div className="flex justify-around gap-3 md:gap-6 px-2 mt-2 pl-8">
-                    {quarters.map((quarter) => {
-                      const filled =
-                        quarter.rata_rata_persentase !== null &&
-                        quarter.rata_rata_persentase !== undefined;
-
-                      return (
-                        <div
-                          key={quarter.periode}
-                          className="text-center flex-1 max-w-[80px]"
-                        >
-                          <p className="text-xs font-semibold text-[#43474F]">
-                            {quarter.singkatan}
-                          </p>
-                          <p className="text-[10px] text-[#737780]">{quarter.rentang}</p>
-                          {!filled && (
-                            <p className="text-[9px] text-[#A3A9B4] italic">
-                              Belum diisi
-                            </p>
-                          )}
-                        </div>
-                      );
-                    })}
+                  {/* Label "Intermediate 1, 2, 3, dst" di bawah chart */}
+                  <div className="flex justify-around gap-3 md:gap-6 px-2 mt-2 pl-8 overflow-x-auto">
+                    {intermediateCapaian.map((item, index) => (
+                      <div
+                        key={item.id}
+                        className="text-center flex-1 min-w-[56px] max-w-[80px]"
+                        title={item.sasaran}
+                      >
+                        <p className="text-xs font-semibold text-[#43474F]">
+                          Intermediate {index + 1}
+                        </p>
+                      </div>
+                    ))}
                   </div>
 
                   {/* Legenda warna */}
@@ -618,10 +612,6 @@ export default function Dashboard() {
                     <div className="flex items-center gap-1.5">
                       <span className="w-2.5 h-2.5 rounded-sm bg-red-400" />
                       <span className="text-[10px] text-[#43474F]">Kurang (&lt;75%)</span>
-                    </div>
-                    <div className="flex items-center gap-1.5">
-                      <span className="w-2.5 h-2.5 rounded-sm bg-[#E2E8F0]" />
-                      <span className="text-[10px] text-[#43474F]">Belum diisi</span>
                     </div>
                   </div>
                 </>
