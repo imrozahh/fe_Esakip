@@ -9,27 +9,46 @@ const DAFTAR_PERIODE = [
   { id: 4, nama: "3 Bulan Keempat", singkatan: "TW IV", rentang: "Okt - Des" },
 ];
 
-export default function CapaianKinerja() {
+function formatRupiah(val) {
+  if (val === null || val === undefined || isNaN(Number(val))) return "Rp 0";
+  return new Intl.NumberFormat("id-ID", {
+    style: "currency",
+    currency: "IDR",
+    maximumFractionDigits: 0,
+  }).format(Number(val));
+}
+
+function round(num, decimals = 2) {
+  const factor = Math.pow(10, decimals);
+  return Math.round((num + Number.EPSILON) * factor) / factor;
+}
+
+export default function RealisasiAnggaran() {
   const currentYear = new Date().getFullYear();
   const [tahun, setTahun] = useState(currentYear);
   const [availableYears, setAvailableYears] = useState([currentYear]);
-  const [data, setData] = useState({ unit_kerja: "", intermediates: [] });
+  const [data, setData] = useState({
+    unit_kerja: "",
+    summary: {
+      total_pagu: 0,
+      total_realisasi: 0,
+      total_sisa: 0,
+      persentase_serapan: 0,
+    },
+    outputs: [],
+  });
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [search, setSearch] = useState("");
 
-  // Modal State
+  // Modal State for Realisasi
   const [selectedCell, setSelectedCell] = useState(null);
   const [formRealisasi, setFormRealisasi] = useState("");
   const [formKeterangan, setFormKeterangan] = useState("");
   const [saving, setSaving] = useState(false);
 
   // Toast Notification
-  const [toast, setToast] = useState({
-    show: false,
-    message: "",
-    type: "success",
-  });
+  const [toast, setToast] = useState({ show: false, message: "", type: "success" });
 
   const showToast = (message, type = "success") => {
     setToast({ show: true, message, type });
@@ -60,20 +79,30 @@ export default function CapaianKinerja() {
     fetchYears();
   }, []);
 
-  // Fetch Capaian Data
+  // Fetch Realisasi Anggaran Data
   const fetchData = async () => {
     setLoading(true);
     setError(null);
     try {
-      const resp = await api.get(`/capaian?tahun=${tahun}`);
+      const resp = await api.get(`/realisasi-anggaran?tahun=${tahun}`);
       if (resp.data && resp.data.data) {
         setData(resp.data.data);
       }
     } catch (err) {
-      console.error("Gagal mengambil data capaian:", err);
-      setError(
-        "Gagal memuat data capaian kinerja. Pastikan server backend aktif.",
-      );
+      console.error("Gagal mengambil data realisasi anggaran:", err);
+      if (err.response) {
+        if (err.response.status === 401) {
+          setError("Sesi login berakhir atau token belum ada. Silakan Logout lalu Login kembali.");
+        } else if (err.response.status === 404) {
+          setError("Endpoint API tidak ditemukan (404). Pastikan backend sudah di-pull.");
+        } else if (err.response.status === 500) {
+          setError("Kesalahan server (500). Pastikan migrasi 'realisasi_anggarans' sudah dijalankan.");
+        } else {
+          setError(err.response.data?.message || `Gagal memuat data (HTTP ${err.response.status}).`);
+        }
+      } else {
+        setError("Gagal terhubung ke backend. Pastikan server backend ('php artisan serve') sedang berjalan.");
+      }
     } finally {
       setLoading(false);
     }
@@ -83,49 +112,35 @@ export default function CapaianKinerja() {
     fetchData();
   }, [tahun]);
 
-  // Summary Calculations
+  // Summary Metrics
   const summary = useMemo(() => {
-    const items = data.intermediates || [];
-    if (items.length === 0) {
-      return { total: 0, avg: 0, highest: 0, lowest: 0 };
-    }
-
-    const percentages = items
-      .map((item) => Number(item.rata_rata_persentase) || 0)
-      .filter((p) => p > 0);
-
-    const avg =
-      percentages.length > 0
-        ? round(percentages.reduce((a, b) => a + b, 0) / percentages.length, 2)
-        : 0;
-
-    const highest = percentages.length > 0 ? Math.max(...percentages) : 0;
-    const lowest = percentages.length > 0 ? Math.min(...percentages) : 0;
-
-    return {
-      total: items.length,
-      avg,
-      highest,
-      lowest,
-    };
+    return (
+      data.summary || {
+        total_pagu: 0,
+        total_realisasi: 0,
+        total_sisa: 0,
+        persentase_serapan: 0,
+      }
+    );
   }, [data]);
 
-  // Filtered Intermediates
-  const filteredIntermediates = useMemo(() => {
-    if (!search.trim()) return data.intermediates || [];
+  // Filtered Outputs
+  const filteredOutputs = useMemo(() => {
+    if (!search.trim()) return data.outputs || [];
     const query = search.toLowerCase();
-    return (data.intermediates || []).filter(
+    return (data.outputs || []).filter(
       (item) =>
+        (item.sub_kegiatan && item.sub_kegiatan.toLowerCase().includes(query)) ||
+        (item.kegiatan && item.kegiatan.toLowerCase().includes(query)) ||
         (item.sasaran && item.sasaran.toLowerCase().includes(query)) ||
-        (item.indikator && item.indikator.toLowerCase().includes(query)),
+        (item.bidang && item.bidang.toLowerCase().includes(query))
     );
-  }, [data.intermediates, search]);
+  }, [data.outputs, search]);
 
   // Open Modal for Cell
-  const handleOpenModal = (intermediate, periodeId) => {
-    const list =
-      intermediate.capaian_triwulan || intermediate.capaian_bulanan || [];
-    const capaian = list.find((c) => (c.periode || c.bulan) === periodeId) || {
+  const handleOpenModal = (output, periodeId) => {
+    const list = output.realisasi_triwulan || [];
+    const itemData = list.find((c) => c.periode === periodeId) || {
       realisasi: null,
       keterangan: "",
     };
@@ -134,13 +149,13 @@ export default function CapaianKinerja() {
       DAFTAR_PERIODE.find((p) => p.id === periodeId) || DAFTAR_PERIODE[0];
 
     setSelectedCell({
-      intermediate,
+      output,
       periodeId,
       periodeInfo,
-      capaian,
+      itemData,
     });
-    setFormRealisasi(capaian.realisasi !== null ? capaian.realisasi : "");
-    setFormKeterangan(capaian.keterangan || "");
+    setFormRealisasi(itemData.realisasi !== null ? itemData.realisasi : "");
+    setFormKeterangan(itemData.keterangan || "");
   };
 
   const handleCloseModal = () => {
@@ -156,38 +171,36 @@ export default function CapaianKinerja() {
     if (!selectedCell) return;
 
     if (formRealisasi === "" || isNaN(Number(formRealisasi))) {
-      showToast("Harap masukkan angka realisasi yang valid.", "error");
+      showToast("Harap masukkan nilai realisasi anggaran yang valid.", "error");
       return;
     }
 
     setSaving(true);
     try {
-      await api.post("/capaian", {
-        intermediate_id: selectedCell.intermediate.id,
+      await api.post("/realisasi-anggaran", {
+        output_id: selectedCell.output.id,
         periode: selectedCell.periodeId,
-        bulan: selectedCell.periodeId,
         tahun: Number(tahun),
         realisasi: Number(formRealisasi),
         keterangan: formKeterangan.trim() || null,
       });
 
       showToast(
-        `Capaian ${selectedCell.periodeInfo.nama} (${selectedCell.periodeInfo.singkatan}) berhasil disimpan!`,
-        "success",
+        `Realisasi anggaran ${selectedCell.periodeInfo.nama} (${selectedCell.periodeInfo.singkatan}) berhasil disimpan!`,
+        "success"
       );
       handleCloseModal();
       await fetchData();
     } catch (err) {
-      console.error("Gagal menyimpan capaian:", err);
-      const msg =
-        err.response?.data?.message || "Gagal menyimpan capaian kinerja.";
+      console.error("Gagal menyimpan realisasi anggaran:", err);
+      const msg = err.response?.data?.message || "Gagal menyimpan realisasi anggaran.";
       showToast(msg, "error");
     } finally {
       setSaving(false);
     }
   };
 
-  // Helper untuk warna badge persentase
+  // Helper styling badge serapan
   const getBadgeStyle = (persen) => {
     if (persen === null || persen === undefined) {
       return "bg-slate-100 text-slate-400 border border-slate-200";
@@ -230,29 +243,25 @@ export default function CapaianKinerja() {
       {/* Breadcrumb Navigation */}
       <nav className="flex items-center gap-2 text-sm text-slate-500">
         <Link to="/dashboard" className="hover:text-slate-700">Dashboard</Link>
-        <span className="material-symbols-outlined text-[16px]">
-          chevron_right
-        </span>
+        <span className="material-symbols-outlined text-[16px]">chevron_right</span>
         <span>Capaian Kerja</span>
-        <span className="material-symbols-outlined text-[16px]">
-          chevron_right
-        </span>
-        <span className="font-bold text-[#001e40]">Capaian Kinerja</span>
+        <span className="material-symbols-outlined text-[16px]">chevron_right</span>
+        <span className="font-bold text-[#001e40]">Realisasi Anggaran</span>
       </nav>
 
       {/* Tab Navigation (Sub Menu Switcher) */}
       <div className="flex items-center gap-2 p-1.5 bg-slate-200/80 rounded-2xl w-fit">
-        <div className="flex items-center gap-2 px-5 py-2.5 rounded-xl text-xs font-bold bg-[#001e40] text-white shadow-sm transition-all">
-          <span className="material-symbols-outlined text-lg">assignment_turned_in</span>
-          <span>Capaian Kinerja (Indikator)</span>
-        </div>
         <Link
-          to="/realisasi-anggaran"
+          to="/capaian-kerja"
           className="flex items-center gap-2 px-5 py-2.5 rounded-xl text-xs font-bold text-slate-600 hover:text-[#001e40] hover:bg-white/60 transition-all"
         >
+          <span className="material-symbols-outlined text-lg">assignment_turned_in</span>
+          <span>Capaian Kinerja (Indikator)</span>
+        </Link>
+        <div className="flex items-center gap-2 px-5 py-2.5 rounded-xl text-xs font-bold bg-[#001e40] text-white shadow-sm transition-all">
           <span className="material-symbols-outlined text-lg">account_balance_wallet</span>
           <span>Realisasi Anggaran (Keuangan)</span>
-        </Link>
+        </div>
       </div>
 
       {/* Header & Filter Card */}
@@ -260,21 +269,18 @@ export default function CapaianKinerja() {
         <div>
           <div className="flex items-center gap-2">
             <span className="material-symbols-outlined text-blue-900 text-3xl">
-              assignment_turned_in
+              account_balance_wallet
             </span>
             <h1 className="text-2xl font-bold text-[#001e40] tracking-tight">
-              Capaian Kinerja (Monitoring Progres per 3 Bulan)
+              Realisasi Anggaran
             </h1>
           </div>
           <p className="text-sm text-slate-500 mt-1">
-            Pantau target dan realisasi per 3 bulan (Triwulan I s.d. IV) untuk setiap sasaran strategis
-            (Intermediate Outcome)
+            Monitoring serapan anggaran per Sub Kegiatan (Output) setiap 3 bulan (Triwulan I s.d. IV)
           </p>
           {data.unit_kerja && (
             <div className="inline-flex items-center gap-1.5 mt-2.5 px-3 py-1 bg-blue-50 text-blue-900 text-xs font-semibold rounded-full border border-blue-200">
-              <span className="material-symbols-outlined text-[15px]">
-                apartment
-              </span>
+              <span className="material-symbols-outlined text-[15px]">apartment</span>
               <span>{data.unit_kerja}</span>
             </div>
           )}
@@ -291,19 +297,15 @@ export default function CapaianKinerja() {
               type="text"
               value={search}
               onChange={(e) => setSearch(e.target.value)}
-              placeholder="Cari sasaran/indikator..."
+              placeholder="Cari sub kegiatan / kegiatan..."
               className="w-full pl-9 pr-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-900 focus:border-transparent transition-all"
             />
           </div>
 
           {/* Tahun Dropdown */}
           <div className="flex items-center gap-2 bg-slate-50 border border-slate-200 rounded-xl px-3 py-2">
-            <span className="material-symbols-outlined text-slate-500 text-lg">
-              calendar_today
-            </span>
-            <span className="text-xs font-semibold text-slate-500 uppercase">
-              Tahun:
-            </span>
+            <span className="material-symbols-outlined text-slate-500 text-lg">calendar_today</span>
+            <span className="text-xs font-semibold text-slate-500 uppercase">Tahun:</span>
             <select
               value={tahun}
               onChange={(e) => setTahun(Number(e.target.value))}
@@ -329,77 +331,70 @@ export default function CapaianKinerja() {
         </div>
       </div>
 
-      {/* Stat Cards */}
+      {/* Stat Cards (Anggaran) */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-        {/* Card 1: Total Sasaran */}
+        {/* Card 1: Total Pagu */}
         <div className="bg-white border border-[#E2E8F0] rounded-xl p-5 shadow-sm flex items-center gap-4">
           <div className="w-12 h-12 rounded-xl bg-blue-50 text-blue-900 flex items-center justify-center shrink-0">
-            <span className="material-symbols-outlined text-2xl">
-              alt_route
-            </span>
+            <span className="material-symbols-outlined text-2xl">account_balance_wallet</span>
           </div>
-          <div>
+          <div className="overflow-hidden">
             <p className="text-xs font-semibold text-slate-500 uppercase tracking-wider">
-              Total Sasaran
+              Total Pagu Anggaran
             </p>
-            <h3 className="text-2xl font-bold text-[#001e40] mt-0.5">
-              {summary.total}{" "}
-              <span className="text-xs font-normal text-slate-400">Node</span>
+            <h3 className="text-lg md:text-xl font-bold text-[#001e40] mt-0.5 truncate" title={formatRupiah(summary.total_pagu)}>
+              {formatRupiah(summary.total_pagu)}
             </h3>
           </div>
         </div>
 
-        {/* Card 2: Rata-rata Capaian */}
+        {/* Card 2: Total Realisasi */}
         <div className="bg-white border border-[#E2E8F0] rounded-xl p-5 shadow-sm flex items-center gap-4">
           <div className="w-12 h-12 rounded-xl bg-emerald-50 text-emerald-700 flex items-center justify-center shrink-0">
-            <span className="material-symbols-outlined text-2xl">
-              trending_up
-            </span>
+            <span className="material-symbols-outlined text-2xl">payments</span>
           </div>
-          <div>
+          <div className="overflow-hidden">
             <p className="text-xs font-semibold text-slate-500 uppercase tracking-wider">
-              Rata-rata Capaian
+              Total Realisasi
             </p>
-            <h3 className="text-2xl font-bold text-emerald-700 mt-0.5">
-              {summary.avg}%
+            <h3 className="text-lg md:text-xl font-bold text-emerald-700 mt-0.5 truncate" title={formatRupiah(summary.total_realisasi)}>
+              {formatRupiah(summary.total_realisasi)}
             </h3>
           </div>
         </div>
 
-        {/* Card 3: Capaian Tertinggi */}
+        {/* Card 3: Sisa Anggaran */}
         <div className="bg-white border border-[#E2E8F0] rounded-xl p-5 shadow-sm flex items-center gap-4">
           <div className="w-12 h-12 rounded-xl bg-indigo-50 text-indigo-700 flex items-center justify-center shrink-0">
-            <span className="material-symbols-outlined text-2xl">
-              workspace_premium
-            </span>
+            <span className="material-symbols-outlined text-2xl">savings</span>
           </div>
-          <div>
+          <div className="overflow-hidden">
             <p className="text-xs font-semibold text-slate-500 uppercase tracking-wider">
-              Capaian Tertinggi
+              Sisa Anggaran
             </p>
-            <h3 className="text-2xl font-bold text-indigo-700 mt-0.5">
-              {summary.highest}%
+            <h3 className="text-lg md:text-xl font-bold text-indigo-700 mt-0.5 truncate" title={formatRupiah(summary.total_sisa)}>
+              {formatRupiah(summary.total_sisa)}
             </h3>
           </div>
         </div>
 
-        {/* Card 4: Capaian Terendah */}
+        {/* Card 4: % Serapan Anggaran */}
         <div className="bg-white border border-[#E2E8F0] rounded-xl p-5 shadow-sm flex items-center gap-4">
           <div className="w-12 h-12 rounded-xl bg-amber-50 text-amber-700 flex items-center justify-center shrink-0">
-            <span className="material-symbols-outlined text-2xl">warning</span>
+            <span className="material-symbols-outlined text-2xl">pie_chart</span>
           </div>
           <div>
             <p className="text-xs font-semibold text-slate-500 uppercase tracking-wider">
-              Capaian Terendah
+              Serapan Anggaran
             </p>
             <h3 className="text-2xl font-bold text-amber-700 mt-0.5">
-              {summary.lowest}%
+              {summary.persentase_serapan}%
             </h3>
           </div>
         </div>
       </div>
 
-      {/* Kategori Ketercapaian Kinerja & Status */}
+      {/* Kategori Serapan & Legenda Status */}
       <div className="bg-white border border-[#E2E8F0] rounded-xl px-5 py-3.5 shadow-sm flex flex-col md:flex-row md:items-center justify-between gap-3 text-xs">
         <div className="flex items-center gap-3">
           <div className="w-9 h-9 rounded-lg bg-blue-50 text-blue-900 flex items-center justify-center shrink-0">
@@ -407,11 +402,10 @@ export default function CapaianKinerja() {
           </div>
           <div>
             <h4 className="font-bold text-slate-800 text-xs">
-              Kategori Ketercapaian Kinerja (Per 3 Bulan)
+              Kategori Serapan Anggaran (Per 3 Bulan)
             </h4>
             <p className="text-[11px] text-slate-500">
-              Klasifikasi persentase total akumulasi realisasi per 3 bulan terhadap
-              target indikator tahun {tahun}
+              Tingkat serapan belanja anggaran triwulan terhadap pagu anggaran tahun {tahun}
             </p>
           </div>
         </div>
@@ -420,7 +414,7 @@ export default function CapaianKinerja() {
         <div className="flex flex-wrap items-center gap-2">
           <span className="px-2.5 py-1 rounded-lg text-xs font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200 flex items-center gap-1.5">
             <span className="w-2 h-2 rounded-full bg-emerald-500"></span>
-            <span>≥ 75% : Tercapai</span>
+            <span>≥ 75% : Sangat Baik</span>
           </span>
           <span className="px-2.5 py-1 rounded-lg text-xs font-semibold bg-amber-50 text-amber-700 border border-amber-200 flex items-center gap-1.5">
             <span className="w-2 h-2 rounded-full bg-amber-500"></span>
@@ -439,14 +433,12 @@ export default function CapaianKinerja() {
           <div className="py-20 text-center space-y-3">
             <span className="inline-block w-8 h-8 border-4 border-blue-900 border-t-transparent rounded-full animate-spin"></span>
             <p className="text-sm text-slate-500 font-medium">
-              Memuat data capaian kinerja tahun {tahun}...
+              Memuat data realisasi anggaran tahun {tahun}...
             </p>
           </div>
         ) : error ? (
           <div className="py-16 text-center space-y-3">
-            <span className="material-symbols-outlined text-rose-500 text-4xl">
-              error
-            </span>
+            <span className="material-symbols-outlined text-rose-500 text-4xl">error</span>
             <p className="text-sm text-slate-700 font-semibold">{error}</p>
             <button
               onClick={fetchData}
@@ -455,15 +447,13 @@ export default function CapaianKinerja() {
               Coba Lagi
             </button>
           </div>
-        ) : filteredIntermediates.length === 0 ? (
+        ) : filteredOutputs.length === 0 ? (
           <div className="py-16 text-center space-y-3">
-            <span className="material-symbols-outlined text-slate-400 text-4xl">
-              inbox
-            </span>
+            <span className="material-symbols-outlined text-slate-400 text-4xl">inbox</span>
             <p className="text-sm text-slate-500">
               {search
                 ? `Tidak ada data yang cocok dengan pencarian "${search}".`
-                : `Belum ada data pohon kinerja pada tahun ${tahun}. Silakan upload file Excel terlebih dahulu di menu Pohon Kinerja.`}
+                : `Belum ada data pohon kinerja pada tahun ${tahun}. Silakan upload Excel terlebih dahulu di menu Pohon Kinerja.`}
             </p>
           </div>
         ) : (
@@ -474,24 +464,18 @@ export default function CapaianKinerja() {
                   <th className="py-3.5 px-3 font-semibold text-center w-10 border-r border-[#002f66]">
                     No
                   </th>
-                  <th className="py-3.5 px-4 font-semibold min-w-[240px] border-r border-[#002f66]">
-                    Sasaran Strategis (Intermediate)
+                  <th className="py-3.5 px-4 font-semibold min-w-[280px] border-r border-[#002f66]">
+                    Sub Kegiatan (Output)
                   </th>
-                  <th className="py-3.5 px-4 font-semibold min-w-[220px] border-r border-[#002f66]">
-                    Indikator Kinerja
-                  </th>
-                  <th className="py-3.5 px-3 font-semibold text-center min-w-[90px] border-r border-[#002f66]">
-                    Target
-                  </th>
-                  <th className="py-3.5 px-3 font-semibold text-center min-w-[80px] border-r border-[#002f66]">
-                    Satuan
+                  <th className="py-3.5 px-4 font-semibold text-right min-w-[170px] border-r border-[#002f66] bg-[#002952]">
+                    Pagu Anggaran (Rp)
                   </th>
 
-                  {/* Kolom 4 Periode (Per 3 Bulan) */}
+                  {/* 4 Kolom Periode Triwulan */}
                   {DAFTAR_PERIODE.map((p) => (
                     <th
                       key={p.id}
-                      className="py-3.5 px-3 font-semibold text-center min-w-[140px] border-r border-[#002f66]"
+                      className="py-3.5 px-3 font-semibold text-center min-w-[150px] border-r border-[#002f66]"
                     >
                       <div className="flex flex-col items-center justify-center">
                         <span className="text-xs font-bold">{p.nama}</span>
@@ -502,18 +486,23 @@ export default function CapaianKinerja() {
                     </th>
                   ))}
 
-                  <th className="py-3.5 px-3 font-semibold text-center min-w-[90px] border-r border-[#002f66] bg-[#002952]">
-                    Total Realisasi
+                  <th className="py-3.5 px-4 font-semibold text-right min-w-[160px] border-r border-[#002f66] bg-[#002952]">
+                    Total Realisasi (Rp)
                   </th>
-                  <th className="py-3.5 px-3 font-semibold text-center min-w-[100px] bg-[#002952]">
-                    % Capaian
+                  <th className="py-3.5 px-4 font-semibold text-right min-w-[150px] border-r border-[#002f66] bg-[#002952]">
+                    Sisa Anggaran (Rp)
+                  </th>
+                  <th className="py-3.5 px-3 font-semibold text-center min-w-[110px] bg-[#002952]">
+                    % Serapan
                   </th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-200">
-                {filteredIntermediates.map((item, index) => {
-                  const targetNum = Number(item.target) || 0;
-                  const rataPersen = Number(item.rata_rata_persentase) || 0;
+                {filteredOutputs.map((item, index) => {
+                  const paguNum = Number(item.pagu) || 0;
+                  const totalRealNum = Number(item.total_realisasi) || 0;
+                  const sisaNum = Number(item.sisa_anggaran) || 0;
+                  const serapanPersen = Number(item.persentase_serapan) || 0;
 
                   return (
                     <tr
@@ -521,72 +510,64 @@ export default function CapaianKinerja() {
                       className="hover:bg-blue-50/40 transition-colors group"
                     >
                       {/* No */}
-                      <td className="py-3 px-3 text-center text-slate-500 font-medium border-r border-slate-100">
+                      <td className="py-3.5 px-3 text-center text-slate-500 font-medium border-r border-slate-100">
                         {index + 1}
                       </td>
 
-                      {/* Sasaran */}
-                      <td className="py-3 px-4 font-semibold text-slate-900 border-r border-slate-100 leading-relaxed">
+                      {/* Sub Kegiatan */}
+                      <td className="py-3.5 px-4 border-r border-slate-100 leading-relaxed">
                         <div className="flex items-start gap-1.5">
                           <span className="material-symbols-outlined text-blue-900 text-base shrink-0 mt-0.5">
-                            alt_route
+                            folder_open
                           </span>
-                          <span>{item.sasaran || item.title || "-"}</span>
+                          <div className="space-y-1">
+                            <span className="font-semibold text-slate-900 block">
+                              {item.sub_kegiatan || "-"}
+                            </span>
+                            {item.kegiatan && (
+                              <span className="text-[10px] text-slate-500 block">
+                                <span className="font-semibold text-slate-400">Kegiatan:</span> {item.kegiatan}
+                              </span>
+                            )}
+                            {item.bidang && item.bidang !== "-" && (
+                              <span className="inline-block px-2 py-0.5 rounded-full text-[10px] font-bold uppercase bg-blue-50 text-blue-900 border border-blue-200">
+                                {item.bidang}
+                              </span>
+                            )}
+                          </div>
                         </div>
                       </td>
 
-                      {/* Indikator */}
-                      <td className="py-3 px-4 text-slate-600 border-r border-slate-100 leading-relaxed">
-                        {item.indikator || "-"}
+                      {/* Pagu Anggaran (read-only) */}
+                      <td className="py-3.5 px-4 text-right font-bold text-[#001e40] border-r border-slate-100 bg-slate-50/50">
+                        {formatRupiah(paguNum)}
                       </td>
 
-                      {/* Target */}
-                      <td className="py-3 px-3 text-center font-bold text-[#001e40] border-r border-slate-100">
-                        {targetNum > 0
-                          ? targetNum
-                          : item.target_satuan_raw || "-"}
-                      </td>
-
-                      {/* Satuan */}
-                      <td className="py-3 px-3 text-center text-slate-600 border-r border-slate-100">
-                        {item.satuan || "-"}
-                      </td>
-
-                      {/* 4 Periode Realisasi (Per 3 Bulan) */}
+                      {/* 4 Kolom Realisasi Triwulan */}
                       {DAFTAR_PERIODE.map((p) => {
-                        const list =
-                          item.capaian_triwulan || item.capaian_bulanan || [];
-                        const cellData = list.find(
-                          (c) => (c.periode || c.bulan) === p.id,
-                        );
-                        const hasValue =
-                          cellData && cellData.realisasi !== null;
-                        const realisasiVal = hasValue
-                          ? Number(cellData.realisasi)
-                          : null;
+                        const list = item.realisasi_triwulan || [];
+                        const cellData = list.find((c) => c.periode === p.id);
+                        const hasValue = cellData && cellData.realisasi !== null;
+                        const realisasiVal = hasValue ? Number(cellData.realisasi) : null;
 
                         return (
                           <td
                             key={p.id}
                             onClick={() => handleOpenModal(item, p.id)}
                             className="py-3 px-3 text-center border-r border-slate-100 cursor-pointer hover:bg-blue-50 transition-colors relative group/cell"
-                            title={`Klik untuk edit realisasi ${p.nama} (${p.singkatan})`}
+                            title={`Klik untuk input/edit realisasi ${p.nama} (${p.singkatan})`}
                           >
                             {hasValue ? (
-                              <div className="flex items-center justify-center h-8">
-                                <span className="font-semibold text-slate-800 text-xs px-3 py-1.5 rounded-lg bg-slate-100 group-hover/cell:bg-blue-100 group-hover/cell:text-blue-950 transition-colors inline-block min-w-[45px]">
-                                  {realisasiVal}
+                              <div className="flex flex-col items-center justify-center">
+                                <span className="font-semibold text-slate-800 text-xs px-2.5 py-1 rounded-lg bg-slate-100 group-hover/cell:bg-blue-100 group-hover/cell:text-blue-950 transition-colors">
+                                  {formatRupiah(realisasiVal)}
                                 </span>
                               </div>
                             ) : (
                               <div className="flex items-center justify-center h-8 text-slate-300 group-hover/cell:text-blue-900">
-                                <span className="group-hover/cell:hidden text-sm">
-                                  -
-                                </span>
+                                <span className="group-hover/cell:hidden text-sm">-</span>
                                 <span className="hidden group-hover/cell:inline-flex items-center gap-1 text-[11px] font-bold text-blue-900 bg-blue-50 px-2 py-1 rounded-lg border border-blue-200 shadow-xs">
-                                  <span className="material-symbols-outlined text-[14px]">
-                                    add
-                                  </span>
+                                  <span className="material-symbols-outlined text-[14px]">add</span>
                                   Isi
                                 </span>
                               </div>
@@ -596,18 +577,23 @@ export default function CapaianKinerja() {
                       })}
 
                       {/* Total Realisasi */}
-                      <td className="py-3 px-3 text-center font-bold text-slate-800 border-r border-slate-100 bg-slate-50/70">
-                        {item.total_realisasi || 0}
+                      <td className="py-3.5 px-4 text-right font-bold text-emerald-800 border-r border-slate-100 bg-emerald-50/20">
+                        {formatRupiah(totalRealNum)}
                       </td>
 
-                      {/* Persentase Rata-rata */}
-                      <td className="py-3 px-3 text-center bg-slate-50/70">
+                      {/* Sisa Anggaran */}
+                      <td className="py-3.5 px-4 text-right font-bold text-slate-700 border-r border-slate-100 bg-slate-50/50">
+                        {formatRupiah(sisaNum)}
+                      </td>
+
+                      {/* % Serapan */}
+                      <td className="py-3.5 px-3 text-center bg-slate-50/70">
                         <span
                           className={`inline-block px-2.5 py-1 rounded-full text-xs ${getBadgeStyle(
-                            rataPersen,
+                            serapanPersen
                           )}`}
                         >
-                          {rataPersen}%
+                          {serapanPersen}%
                         </span>
                       </td>
                     </tr>
@@ -619,29 +605,27 @@ export default function CapaianKinerja() {
         )}
       </div>
 
-      {/* Visualisasi Progress Bar per Sasaran */}
-      {!loading && filteredIntermediates.length > 0 && (
+      {/* Visualisasi Serapan Anggaran per Sub Kegiatan */}
+      {!loading && filteredOutputs.length > 0 && (
         <div className="bg-white border border-[#E2E8F0] rounded-2xl p-6 shadow-sm space-y-4">
           <div className="flex items-center justify-between border-b border-slate-100 pb-4">
             <div>
               <h2 className="text-lg font-bold text-[#001e40]">
-                Ringkasan Capaian Tahunan per Sasaran
+                Progres Serapan Anggaran per Sub Kegiatan
               </h2>
               <p className="text-xs text-slate-500 mt-0.5">
-                Perbandingan total realisasi bulanan terhadap target indikator
-                tahun {tahun}
+                Perbandingan akumulasi serapan belanja triwulan terhadap pagu anggaran tahun {tahun}
               </p>
             </div>
-            <span className="material-symbols-outlined text-slate-400">
-              bar_chart
-            </span>
+            <span className="material-symbols-outlined text-slate-400">bar_chart</span>
           </div>
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4 pt-1">
-            {filteredIntermediates.map((item, index) => {
-              const target = Number(item.target) || 0;
-              const total = Number(item.total_realisasi) || 0;
-              const persen = Number(item.rata_rata_persentase) || 0;
+            {filteredOutputs.map((item, index) => {
+              const pagu = Number(item.pagu) || 0;
+              const totalReal = Number(item.total_realisasi) || 0;
+              const sisa = Number(item.sisa_anggaran) || 0;
+              const persen = Number(item.persentase_serapan) || 0;
               const displayWidth = Math.min(persen, 100);
 
               return (
@@ -652,18 +636,15 @@ export default function CapaianKinerja() {
                   <div className="flex items-start justify-between gap-3">
                     <div className="space-y-0.5">
                       <span className="text-[10px] font-bold text-blue-900 bg-blue-50 px-2 py-0.5 rounded-full border border-blue-200">
-                        Sasaran #{index + 1}
+                        Sub Kegiatan #{index + 1}
                       </span>
                       <h4 className="text-xs font-bold text-slate-800 line-clamp-2 mt-1">
-                        {item.sasaran}
+                        {item.sub_kegiatan || "-"}
                       </h4>
-                      <p className="text-[11px] text-slate-500 italic">
-                        Indikator: {item.indikator}
-                      </p>
                     </div>
                     <span
                       className={`shrink-0 px-2.5 py-1 rounded-lg text-xs font-bold ${getBadgeStyle(
-                        persen,
+                        persen
                       )}`}
                     >
                       {persen}%
@@ -675,18 +656,17 @@ export default function CapaianKinerja() {
                     <div className="w-full h-3 bg-slate-200 rounded-full overflow-hidden p-0.5">
                       <div
                         className={`h-full rounded-full bg-gradient-to-r ${getProgressColor(
-                          persen,
+                          persen
                         )} transition-all duration-500`}
                         style={{ width: `${displayWidth}%` }}
                       ></div>
                     </div>
-                    <div className="flex items-center justify-between text-[11px] text-slate-500 font-medium">
-                      <span>
-                        Realisasi: <strong>{total}</strong> {item.satuan}
-                      </span>
-                      <span>
-                        Target: <strong>{target}</strong> {item.satuan}
-                      </span>
+                    <div className="flex items-center justify-between text-[11px] text-slate-600 font-medium pt-1">
+                      <span>Realisasi: <strong>{formatRupiah(totalReal)}</strong></span>
+                      <span>Pagu: <strong>{formatRupiah(pagu)}</strong></span>
+                    </div>
+                    <div className="text-[10px] text-slate-400 text-right">
+                      Sisa: {formatRupiah(sisa)}
                     </div>
                   </div>
                 </div>
@@ -696,17 +676,15 @@ export default function CapaianKinerja() {
         </div>
       )}
 
-      {/* Modal Input Realisasi */}
+      {/* Modal Input Realisasi Anggaran */}
       {selectedCell && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/50 backdrop-blur-xs animate-fadeIn">
           <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg overflow-hidden border border-slate-100">
             {/* Modal Header */}
             <div className="bg-[#001e40] px-6 py-4 text-white flex items-center justify-between">
               <div className="flex items-center gap-2.5">
-                <span className="material-symbols-outlined text-xl">
-                  edit_note
-                </span>
-                <h3 className="font-bold text-base">Input Realisasi Capaian</h3>
+                <span className="material-symbols-outlined text-xl">payments</span>
+                <h3 className="font-bold text-base">Input Realisasi Anggaran</h3>
               </div>
               <button
                 onClick={handleCloseModal}
@@ -720,33 +698,32 @@ export default function CapaianKinerja() {
             {/* Modal Body */}
             <form onSubmit={handleSaveRealisasi}>
               <div className="p-6 space-y-4 max-h-[75vh] overflow-y-auto">
-                {/* Info Card Sasaran */}
+                {/* Info Card Sub Kegiatan */}
                 <div className="bg-slate-50 border border-slate-200 rounded-xl p-4 space-y-2">
                   <div>
                     <span className="text-[10px] uppercase font-bold text-slate-400 tracking-wider">
-                      Sasaran Strategis
+                      Sub Kegiatan
                     </span>
                     <p className="text-xs font-bold text-[#001e40] mt-0.5">
-                      {selectedCell.intermediate.sasaran}
+                      {selectedCell.output.sub_kegiatan}
                     </p>
                   </div>
 
                   <div className="grid grid-cols-2 gap-2 pt-1 border-t border-slate-200/80">
                     <div>
                       <span className="text-[10px] uppercase font-semibold text-slate-400">
-                        Indikator
+                        Kegiatan
                       </span>
                       <p className="text-xs text-slate-700">
-                        {selectedCell.intermediate.indikator}
+                        {selectedCell.output.kegiatan || "-"}
                       </p>
                     </div>
                     <div>
                       <span className="text-[10px] uppercase font-semibold text-slate-400">
-                        Target & Satuan
+                        Pagu Anggaran
                       </span>
                       <p className="text-xs font-bold text-blue-950">
-                        {selectedCell.intermediate.target}{" "}
-                        {selectedCell.intermediate.satuan}
+                        {formatRupiah(selectedCell.output.pagu)}
                       </p>
                     </div>
                   </div>
@@ -767,7 +744,7 @@ export default function CapaianKinerja() {
                     htmlFor="realisasiInput"
                     className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1.5"
                   >
-                    Nilai Realisasi Aktual *
+                    Nilai Realisasi Anggaran Periode Ini (Rp) *
                   </label>
                   <div className="relative">
                     <input
@@ -777,41 +754,43 @@ export default function CapaianKinerja() {
                       min="0"
                       value={formRealisasi}
                       onChange={(e) => setFormRealisasi(e.target.value)}
-                      placeholder={`Contoh: ${selectedCell.intermediate.target || "10"}`}
+                      placeholder="Masukkan nilai realisasi (contoh: 125000000)"
                       autoFocus
                       required
-                      className="w-full pl-3 pr-20 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm font-semibold focus:outline-none focus:ring-2 focus:ring-blue-900 focus:border-transparent transition-all"
+                      className="w-full pl-3 pr-4 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm font-semibold focus:outline-none focus:ring-2 focus:ring-blue-900 focus:border-transparent transition-all"
                     />
-                    <span className="absolute right-3 top-1/2 -translate-y-1/2 text-xs font-semibold text-slate-400">
-                      {selectedCell.intermediate.satuan || ""}
-                    </span>
                   </div>
+                  {formRealisasi !== "" && !isNaN(Number(formRealisasi)) && (
+                    <p className="text-[11px] text-slate-500 mt-1">
+                      Terbilang: <strong>{formatRupiah(formRealisasi)}</strong>
+                    </p>
+                  )}
                 </div>
 
-                {/* Preview Persentase Realtime */}
-                {formRealisasi !== "" && !isNaN(Number(formRealisasi)) && (
-                  <div className="bg-blue-50/70 border border-blue-200 rounded-xl p-3 flex items-center justify-between">
-                    <span className="text-xs font-semibold text-slate-600">
-                      Proyeksi Persentase Capaian:
-                    </span>
-                    {(() => {
-                      const target =
-                        Number(selectedCell.intermediate.target) || 0;
-                      const real = Number(formRealisasi) || 0;
-                      const persen =
-                        target > 0 ? round((real / target) * 100, 2) : 0;
-                      return (
-                        <span
-                          className={`px-2.5 py-0.5 rounded-full text-xs font-bold ${getBadgeStyle(
-                            persen,
-                          )}`}
-                        >
-                          {persen}%
-                        </span>
-                      );
-                    })()}
-                  </div>
-                )}
+                {/* Preview Persentase Serapan Realtime */}
+                {formRealisasi !== "" &&
+                  !isNaN(Number(formRealisasi)) &&
+                  Number(selectedCell.output.pagu) > 0 && (
+                    <div className="bg-blue-50/70 border border-blue-200 rounded-xl p-3 flex items-center justify-between">
+                      <span className="text-xs font-semibold text-slate-600">
+                        Proyeksi Serapan Periode Ini:
+                      </span>
+                      {(() => {
+                        const pagu = Number(selectedCell.output.pagu) || 0;
+                        const real = Number(formRealisasi) || 0;
+                        const persen = pagu > 0 ? round((real / pagu) * 100, 2) : 0;
+                        return (
+                          <span
+                            className={`px-2.5 py-0.5 rounded-full text-xs font-bold ${getBadgeStyle(
+                              persen
+                            )}`}
+                          >
+                            {persen}%
+                          </span>
+                        );
+                      })()}
+                    </div>
+                  )}
 
                 {/* Input Keterangan */}
                 <div>
@@ -819,14 +798,14 @@ export default function CapaianKinerja() {
                     htmlFor="keteranganInput"
                     className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1.5"
                   >
-                    Keterangan / Catatan (Opsional)
+                    Keterangan / Catatan Belanja (Opsional)
                   </label>
                   <textarea
                     id="keteranganInput"
                     rows="3"
                     value={formKeterangan}
                     onChange={(e) => setFormKeterangan(e.target.value)}
-                    placeholder="Contoh: Realisasi kegiatan bulan ini telah memenuhi target triwulan..."
+                    placeholder="Contoh: Realisasi belanja operasional dan pemeliharaan triwulan ini..."
                     className="w-full p-3 bg-slate-50 border border-slate-200 rounded-xl text-xs focus:outline-none focus:ring-2 focus:ring-blue-900 focus:border-transparent transition-all"
                   ></textarea>
                 </div>
@@ -854,10 +833,8 @@ export default function CapaianKinerja() {
                     </>
                   ) : (
                     <>
-                      <span className="material-symbols-outlined text-base">
-                        save
-                      </span>
-                      <span>Simpan Capaian</span>
+                      <span className="material-symbols-outlined text-base">save</span>
+                      <span>Simpan Realisasi</span>
                     </>
                   )}
                 </button>
@@ -868,10 +845,4 @@ export default function CapaianKinerja() {
       )}
     </div>
   );
-}
-
-// Simple round helper
-function round(num, decimals = 2) {
-  const factor = Math.pow(10, decimals);
-  return Math.round((num + Number.EPSILON) * factor) / factor;
 }

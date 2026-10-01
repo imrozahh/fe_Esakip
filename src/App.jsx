@@ -5,6 +5,7 @@ import Dashboard from "./pages/Dashboard";
 import PohonKinerja from "./pages/PohonKinerja";
 import RencanaStrategi from "./pages/PohonRenstra";
 import CapaianKerja from "./pages/CapaianKinerja";
+import RealisasiAnggaran from "./pages/RealisasiAnggaran";
 import Laporan from "./pages/Laporan";
 
 import DashboardLayout from "./layouts/DashboardLayout";
@@ -44,6 +45,11 @@ function App() {
               <Route
                 path="/capaian-kerja"
                 element={<CapaianKerja />}
+              />
+
+              <Route
+                path="/realisasi-anggaran"
+                element={<RealisasiAnggaran />}
               />
 
               <Route
