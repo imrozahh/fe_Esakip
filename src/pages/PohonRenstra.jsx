@@ -17,11 +17,48 @@ const LEVEL_TO_SLUG = {
 };
 
 /* =========================================================
+   AUTH HELPER
+   Semua route /renstra* sekarang di dalam auth:sanctum, jadi
+   SETIAP request ke situ wajib bawa header Authorization.
+   Tanpa ini, backend balikin 401 "Unauthenticated." — ini
+   penyebab dropdown tahun & tabel sempat kosong sebelumnya.
+========================================================= */
+
+function getAuthHeaders(extraHeaders = {}) {
+  const token = localStorage.getItem("e_sakip_token");
+
+  return {
+    Accept: "application/json",
+    ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    ...extraHeaders,
+  };
+}
+
+/* =========================================================
    UTILITIES
 ========================================================= */
 
 function createId(prefix) {
   return `${prefix}-${Date.now()}-${Math.random().toString(36).substring(2, 8)}`;
+}
+
+function formatRupiah(value) {
+  const number = Number(value) || 0;
+  return `Rp ${number.toLocaleString("id-ID")}`;
+}
+
+// Samain persis sama enum kolom `bidang` di tabel intermediates & `role` di users.
+const BIDANG_LABELS = {
+  komunikasi: "Komunikasi",
+  statistik: "Statistik",
+  persandian: "Persandian",
+  aplikasi: "Aplikasi",
+  kesekretariatan: "Kesekretariatan",
+};
+
+function formatBidang(value) {
+  if (!value) return "-";
+  return BIDANG_LABELS[value] || value;
 }
 
 /* =========================================================
@@ -82,6 +119,7 @@ const EXPORT_HEADER = [
   "Nomenklatur SIPD",
   "Indikator",
   "Target/ Satuan",
+  "Anggaran",
 ];
 
 // Warna ARGB persis seperti file referensi (casecading-1_terisi_intermediate).
@@ -100,6 +138,7 @@ const HEADER_COLORS = [
   COLOR_ORANGE, COLOR_GREEN, COLOR_GREEN, COLOR_GREEN, COLOR_GREEN, // Output, Kegiatan, Nomenklatur, Indikator, Target
   COLOR_GRAY, // Output/ Input
   COLOR_YELLOW, COLOR_YELLOW, COLOR_YELLOW, COLOR_YELLOW, // Sub Kegiatan, Nomenklatur, Indikator, Target
+  COLOR_GRAY, // Anggaran
 ];
 
 // Di baris DATA, cuma 4 kolom "nama" (Ultimate/Intermediate/Immediate/Output)
@@ -113,7 +152,7 @@ const DATA_NAME_COLUMN_COLORS = {
 
 // Lebar kolom (wch) persis mengikuti file referensi.
 const EXPORT_COLUMN_WIDTHS = [
-  18, 14, 14, 18, 38, 30, 13, 18, 26, 21, 19, 18, 19, 27, 23, 21, 17, 18, 17, 20, 19, 26, 17,
+  18, 14, 14, 18, 38, 30, 13, 18, 26, 21, 19, 18, 19, 27, 23, 21, 17, 18, 20, 20, 19, 26, 17, 17,
 ];
 
 const THIN_BORDER = {
@@ -144,9 +183,9 @@ function dataCellStyle(bgColor) {
 }
 
 /**
- * Susun baris export. Beda dari versi sebelumnya: nilai induk (Ultimate,
- * Intermediate, Immediate, Output) DIULANG di setiap baris turunannya —
- * tidak dikosongkan — persis seperti format file referensi (tanpa merge cell).
+ * Susun baris export. Nilai induk (Ultimate, Intermediate, Immediate,
+ * Output) DIULANG di setiap baris turunannya — tidak dikosongkan —
+ * persis seperti format file referensi (tanpa merge cell).
  */
 function buildExportRows(renstraList) {
   const rows = [];
@@ -195,6 +234,7 @@ function buildExportRows(renstraList) {
             sub.nomenklaturSipd || "",
             sub.indicator || "",
             sub.target || "",
+            Number(output.anggaran) || 0,
           ]);
         });
       });
@@ -203,6 +243,9 @@ function buildExportRows(renstraList) {
 
   return rows;
 }
+
+// Index kolom "Anggaran" di EXPORT_HEADER — dipakai buat format angka.
+const ANGGARAN_COLUMN_INDEX = 23;
 
 function exportRenstraToExcel(renstraList, year) {
   const dataRows = buildExportRows(renstraList);
@@ -222,6 +265,12 @@ function exportRenstraToExcel(renstraList, year) {
         rowIndex === 0
           ? headerCellStyle(HEADER_COLORS[colIndex])
           : dataCellStyle(DATA_NAME_COLUMN_COLORS[colIndex]);
+
+      // Kolom Anggaran di baris data: format angka ribuan.
+      if (rowIndex > 0 && colIndex === ANGGARAN_COLUMN_INDEX) {
+        worksheet[cellRef].s.numFmt = "#,##0";
+        worksheet[cellRef].t = "n";
+      }
     }
   }
 
@@ -291,6 +340,7 @@ function DetailModal({ data, level, onClose, onEdit }) {
 
     "INTERMEDIATE OUTCOME": [
       ["Intermediate Outcome", data.title],
+      ["Bidang", formatBidang(data.bidang)],
       ["Sasaran", data.sasaran],
       ["Indikator", data.indicator],
       ["Target / Satuan", data.target],
@@ -315,6 +365,7 @@ function DetailModal({ data, level, onClose, onEdit }) {
       ["Nomenklatur SIPD", sub.nomenklaturSipd],
       ["Indikator", sub.indicator],
       ["Target / Satuan", sub.target],
+      ["Anggaran", formatRupiah(data.anggaran)], // dipindah ke paling bawah
     ],
   };
 
@@ -411,6 +462,7 @@ function FormModal({ data, level, saving, onClose, onSave }) {
     nomenklaturSipd: data?.nomenklaturSipd || "",
     kegiatan: data?.kegiatan || "",
     outputInput: data?.outputInput || "",
+    anggaran: data?.anggaran ?? 0,
     indicator: data?.indicator || "",
     target: data?.target || "",
 
@@ -522,36 +574,6 @@ function FormModal({ data, level, saving, onClose, onSave }) {
               </>
             )}
 
-            {level === "OUTPUT" && (
-              <>
-                <div>
-                  <label className="mb-1 block text-xs font-semibold uppercase tracking-wider text-slate-500">
-                    Kegiatan
-                  </label>
-                  <textarea
-                    value={form.kegiatan}
-                    onChange={(event) => changeField("kegiatan", event.target.value)}
-                    rows={3}
-                    placeholder="Masukkan kegiatan..."
-                    className="w-full resize-y rounded-md border border-slate-300 p-3 text-sm text-slate-700 outline-none transition focus:border-blue-950 focus:ring-2 focus:ring-blue-950/20"
-                  />
-                </div>
-
-                <div>
-                  <label className="mb-1 block text-xs font-semibold uppercase tracking-wider text-slate-500">
-                    Nomenklatur SIPD
-                  </label>
-                  <input
-                    type="text"
-                    value={form.nomenklaturSipd}
-                    onChange={(event) => changeField("nomenklaturSipd", event.target.value)}
-                    placeholder="Masukkan kode nomenklatur SIPD..."
-                    className="w-full rounded-md border border-slate-300 p-3 text-sm text-slate-700 outline-none transition focus:border-blue-950 focus:ring-2 focus:ring-blue-950/20"
-                  />
-                </div>
-              </>
-            )}
-
             {/* INDIKATOR & TARGET — dipakai semua level kecuali OUTPUT (OUTPUT taruh setelah Output/Input) */}
             {level !== "OUTPUT" && (
               <>
@@ -585,6 +607,32 @@ function FormModal({ data, level, saving, onClose, onSave }) {
 
             {level === "OUTPUT" && (
               <>
+                <div>
+                  <label className="mb-1 block text-xs font-semibold uppercase tracking-wider text-slate-500">
+                    Kegiatan
+                  </label>
+                  <textarea
+                    value={form.kegiatan}
+                    onChange={(event) => changeField("kegiatan", event.target.value)}
+                    rows={3}
+                    placeholder="Masukkan kegiatan..."
+                    className="w-full resize-y rounded-md border border-slate-300 p-3 text-sm text-slate-700 outline-none transition focus:border-blue-950 focus:ring-2 focus:ring-blue-950/20"
+                  />
+                </div>
+
+                <div>
+                  <label className="mb-1 block text-xs font-semibold uppercase tracking-wider text-slate-500">
+                    Nomenklatur SIPD
+                  </label>
+                  <input
+                    type="text"
+                    value={form.nomenklaturSipd}
+                    onChange={(event) => changeField("nomenklaturSipd", event.target.value)}
+                    placeholder="Masukkan kode nomenklatur SIPD..."
+                    className="w-full rounded-md border border-slate-300 p-3 text-sm text-slate-700 outline-none transition focus:border-blue-950 focus:ring-2 focus:ring-blue-950/20"
+                  />
+                </div>
+
                 <div>
                   <label className="mb-1 block text-xs font-semibold uppercase tracking-wider text-slate-500">
                     Indikator
@@ -675,6 +723,21 @@ function FormModal({ data, level, saving, onClose, onSave }) {
                     className="w-full rounded-md border border-slate-300 p-3 text-sm text-slate-700 outline-none transition focus:border-blue-950 focus:ring-2 focus:ring-blue-950/20"
                   />
                 </div>
+
+                {/* ANGGARAN — paling bawah */}
+                <div>
+                  <label className="mb-1 block text-xs font-semibold uppercase tracking-wider text-slate-500">
+                    Anggaran (Rp)
+                  </label>
+                  <input
+                    type="number"
+                    min="0"
+                    value={form.anggaran}
+                    onChange={(event) => changeField("anggaran", event.target.value)}
+                    placeholder="Contoh: 50000000"
+                    className="w-full rounded-md border border-slate-300 p-3 text-sm text-slate-700 outline-none transition focus:border-blue-950 focus:ring-2 focus:ring-blue-950/20"
+                  />
+                </div>
               </>
             )}
           </div>
@@ -710,7 +773,7 @@ function FormModal({ data, level, saving, onClose, onSave }) {
    TABLE — 4 kolom, 1 baris per Output
 ========================================================= */
 
-function RenstraTable({ data, archived, onDetail }) {
+function RenstraTable({ data, archived, loading, onDetail }) {
   return (
     <div className="w-full overflow-hidden rounded-lg border border-slate-300 bg-white shadow-sm">
       <table className="w-full table-fixed border-collapse">
@@ -732,7 +795,18 @@ function RenstraTable({ data, archived, onDetail }) {
         </thead>
 
         <tbody>
-          {archived && (
+          {loading && (
+            <tr>
+              <td colSpan={4} className="px-6 py-12 text-center">
+                <span className="material-symbols-outlined mb-2 block animate-spin text-4xl text-blue-800">
+                  progress_activity
+                </span>
+                <p className="text-sm font-semibold text-slate-600">Mengambil data...</p>
+              </td>
+            </tr>
+          )}
+
+          {!loading && archived && (
             <tr>
               <td colSpan={4} className="px-6 py-12 text-center">
                 <span className="material-symbols-outlined mb-2 block text-4xl text-amber-400">
@@ -749,7 +823,7 @@ function RenstraTable({ data, archived, onDetail }) {
             </tr>
           )}
 
-          {!archived && data.length === 0 && (
+          {!loading && !archived && data.length === 0 && (
             <tr>
               <td colSpan={4} className="px-6 py-12 text-center">
                 <span className="material-symbols-outlined mb-2 block text-4xl text-slate-300">
@@ -760,7 +834,7 @@ function RenstraTable({ data, archived, onDetail }) {
             </tr>
           )}
 
-          {!archived &&
+          {!loading && !archived &&
             data.map((renstra) => {
             const ultimate = renstra.ultimateOutcome;
             const ultimateRows = countUltimateRows(renstra);
@@ -885,6 +959,7 @@ function PohonRenstra() {
   const [editData, setEditData] = useState(null);
   const [saving, setSaving] = useState(false);
   const [isArchived, setIsArchived] = useState(false);
+  const [loadingData, setLoadingData] = useState(true);
 
   // Available years state
   const [availableYears, setAvailableYears] = useState([]);
@@ -896,10 +971,8 @@ function PohonRenstra() {
       setLoadingYears(true);
       try {
         const response = await fetch(`${API_BASE_URL}/renstra/years`, {
-          method: 'GET',
-          headers: {
-            Accept: 'application/json',
-          },
+          method: "GET",
+          headers: getAuthHeaders(),
         });
 
         const data = await response.json();
@@ -910,9 +983,11 @@ function PohonRenstra() {
           if (data.data && data.data.length > 0) {
             setYear(String(data.data[0]));
           }
+        } else {
+          console.error("Gagal mengambil daftar tahun:", data.message);
         }
       } catch (err) {
-        console.error('Failed to fetch years:', err);
+        console.error("Failed to fetch years:", err);
       } finally {
         setLoadingYears(false);
       }
@@ -922,10 +997,20 @@ function PohonRenstra() {
   }, []);
 
   useEffect(() => {
+    if (!year) {
+      setLoadingData(false);
+      return;
+    }
+
     const fetchRenstra = async () => {
+      setLoadingData(true);
+
       try {
         const response = await fetch(
-          `${API_BASE_URL}/renstra?tahun=${year}`
+          `${API_BASE_URL}/renstra?tahun=${year}`,
+          {
+            headers: getAuthHeaders(),
+          }
         );
 
         const result = await response.json();
@@ -941,6 +1026,7 @@ function PohonRenstra() {
         setIsArchived(false);
 
         if (!response.ok) {
+          console.error("Gagal mengambil data Renstra:", result.message);
           setData([]);
           return;
         }
@@ -967,6 +1053,8 @@ function PohonRenstra() {
         console.error("Gagal mengambil data Renstra:", error);
         setIsArchived(false);
         setData([]);
+      } finally {
+        setLoadingData(false);
       }
     };
 
@@ -1060,6 +1148,7 @@ function PohonRenstra() {
                       indicator: formValues.indicator,
                       target: formValues.target,
                       outputInput: formValues.outputInput,
+                      anggaran: formValues.anggaran,
                       subKegiatan: [
                         {
                           ...(output.subKegiatan?.[0] || {}),
@@ -1095,18 +1184,19 @@ function PohonRenstra() {
         const [outputRes, subRes] = await Promise.all([
           fetch(`${API_BASE_URL}/renstra/nodes/output/${id}`, {
             method: "PUT",
-            headers: { "Content-Type": "application/json" },
+            headers: getAuthHeaders({ "Content-Type": "application/json" }),
             body: JSON.stringify({
               kegiatan: formValues.kegiatan,
               nomenklaturSipd: formValues.nomenklaturSipd,
               indicator: formValues.indicator,
               target: formValues.target,
               outputInput: formValues.outputInput,
+              anggaran: formValues.anggaran,
             }),
           }),
           fetch(`${API_BASE_URL}/renstra/nodes/sub-kegiatan/${id}`, {
             method: "PUT",
-            headers: { "Content-Type": "application/json" },
+            headers: getAuthHeaders({ "Content-Type": "application/json" }),
             body: JSON.stringify({
               title: formValues.subKegiatanTitle,
               nomenklaturSipd: formValues.subKegiatanNomenklaturSipd,
@@ -1117,6 +1207,12 @@ function PohonRenstra() {
         ]);
 
         ok = outputRes.ok && subRes.ok;
+
+        if (!ok) {
+          const failed = !outputRes.ok ? outputRes : subRes;
+          const errJson = await failed.json().catch(() => ({}));
+          console.error("Gagal menyimpan Output/Sub Kegiatan:", errJson.message);
+        }
       } else {
         const body =
           level === "ULTIMATE OUTCOME"
@@ -1140,15 +1236,20 @@ function PohonRenstra() {
 
         const response = await fetch(`${API_BASE_URL}/renstra/nodes/${slug}/${id}`, {
           method: "PUT",
-          headers: { "Content-Type": "application/json" },
+          headers: getAuthHeaders({ "Content-Type": "application/json" }),
           body: JSON.stringify(body),
         });
 
         ok = response.ok;
+
+        if (!ok) {
+          const errJson = await response.json().catch(() => ({}));
+          console.error("Gagal menyimpan perubahan:", errJson.message);
+        }
       }
 
       if (!ok) {
-        alert("Gagal menyimpan perubahan ke server.");
+        alert("Gagal menyimpan perubahan ke server. Coba login ulang kalau masalah berlanjut.");
         return;
       }
 
@@ -1221,7 +1322,7 @@ function PohonRenstra() {
         </div>
 
         {/* INFO */}
-        {isArchived ? (
+        {!loadingData && isArchived ? (
           <div className="mb-5 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3">
             <div className="flex items-start gap-3">
               <span className="material-symbols-outlined text-amber-600">archive</span>
@@ -1253,7 +1354,7 @@ function PohonRenstra() {
         )}
 
         {/* TABLE */}
-        <RenstraTable data={filteredData} archived={isArchived} onDetail={openDetail} />
+        <RenstraTable data={filteredData} archived={isArchived} loading={loadingData} onDetail={openDetail} />
       </main>
 
       {/* DETAIL MODAL */}
