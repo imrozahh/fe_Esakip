@@ -7,10 +7,21 @@ function Sidebar() {
   const location = useLocation();
   const { logout } = useAuth();
   const [openSubmenu, setOpenSubmenu] = useState(null);
+  const [showLogoutModal, setShowLogoutModal] = useState(false);
+  const [isLoggingOut, setIsLoggingOut] = useState(false);
 
-  const handleLogout = async () => {
-    await logout();
-    navigate("/login", { replace: true });
+  const handleConfirmLogout = async () => {
+    setIsLoggingOut(true);
+    try {
+      await logout();
+      setShowLogoutModal(false);
+      navigate("/login", { replace: true });
+    } catch (error) {
+      console.error("Logout error:", error);
+      navigate("/login", { replace: true });
+    } finally {
+      setIsLoggingOut(false);
+    }
   };
 
   // Check if current path is under capaian sub-menu
@@ -157,18 +168,65 @@ function Sidebar() {
 
       {/* Logout */}
       <div className="border-t border-[#003366] pt-4">
-        <NavLink
-          to="/login"
-          onClick={() => {
-            localStorage.removeItem("token");
-            localStorage.removeItem("user");
-          }}
-          className="flex items-center gap-3 px-3 py-2.5 rounded text-sm font-semibold text-[#d5e3ff] hover:bg-[#003366]/70 hover:text-white transition-colors"
+        <button
+          type="button"
+          onClick={() => setShowLogoutModal(true)}
+          className="w-full flex items-center gap-3 px-3 py-2.5 rounded text-sm font-semibold text-[#d5e3ff] hover:bg-red-500/20 hover:text-red-200 transition-colors text-left"
         >
           <span className="material-symbols-outlined">logout</span>
           Logout
-        </NavLink>
+        </button>
       </div>
+
+      {/* Pop up Konfirmasi Logout */}
+      {showLogoutModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
+          <div className="w-full max-w-sm rounded-2xl bg-white p-6 shadow-2xl text-center border border-slate-100">
+            {/* Icon */}
+            <div className="mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-full bg-red-100 text-red-600">
+              <span className="material-symbols-outlined text-[32px]">logout</span>
+            </div>
+
+            {/* Title & Desc */}
+            <h3 className="text-lg font-bold text-slate-900">
+              Konfirmasi Logout
+            </h3>
+            <p className="mt-2 text-sm text-slate-500 leading-relaxed">
+              Apakah Anda yakin ingin keluar dari sistem E-SAKIP?
+            </p>
+
+            {/* Actions */}
+            <div className="mt-6 flex gap-3">
+              <button
+                type="button"
+                onClick={() => setShowLogoutModal(false)}
+                disabled={isLoggingOut}
+                className="flex-1 rounded-xl border border-slate-300 bg-white py-2.5 text-sm font-semibold text-slate-700 hover:bg-slate-50 active:bg-slate-100 transition disabled:opacity-50"
+              >
+                Batal
+              </button>
+              <button
+                type="button"
+                onClick={handleConfirmLogout}
+                disabled={isLoggingOut}
+                className="flex-1 rounded-xl bg-red-600 py-2.5 text-sm font-semibold text-white hover:bg-red-700 active:bg-red-800 shadow-md hover:shadow-lg transition disabled:opacity-50 flex items-center justify-center gap-1.5"
+              >
+                {isLoggingOut ? (
+                  <>
+                    <span className="inline-block h-4 w-4 animate-spin rounded-full border-2 border-white border-t-transparent" />
+                    <span>Keluar...</span>
+                  </>
+                ) : (
+                  <>
+                    <span className="material-symbols-outlined text-[18px]">check</span>
+                    <span>Ya, Keluar</span>
+                  </>
+                )}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </aside>
   );
 }
