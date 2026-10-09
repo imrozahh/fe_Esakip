@@ -73,11 +73,80 @@ function escapeHtml(value = "") {
   })[character]);
 }
 
+function parseIndicators(val, fallback = "") {
+  if (Array.isArray(val) && val.length > 0) {
+    return val.map((v) => String(v ?? "").trim()).filter(Boolean);
+  }
+  const str = String(val || fallback || "").trim();
+  if (!str) return [""];
+  if (str.startsWith("[") && str.endsWith("]")) {
+    try {
+      const parsed = JSON.parse(str);
+      if (Array.isArray(parsed) && parsed.length > 0) {
+        return parsed.map((v) => String(v ?? "").trim()).filter(Boolean);
+      }
+    } catch (_) {}
+  }
+  const lines = str.split("\n").map((l) => l.trim()).filter(Boolean);
+  return lines.length > 0 ? lines : [str];
+}
+
+function isDefaultTitle(title) {
+  const t = (title || "").trim().toUpperCase();
+  return (
+    t === "SASARAN ANTARA BARU" ||
+    t === "SASARAN LANGSUNG BARU" ||
+    t === "OUTPUT BARU" ||
+    t === "NODE BARU"
+  );
+}
+
+function isDefaultIndicator(ind) {
+  const i = (ind || "").trim().toLowerCase();
+  return (
+    i === "tambahkan indikator" ||
+    i === "belum ada indikator"
+  );
+}
+
+function getNodeTitlePlaceholder(level) {
+  switch (level) {
+    case "ULTIMATE":
+      return "Masukkan tujuan ultimate...";
+    case "INTERMEDIATE":
+      return "Masukkan sasaran intermediate...";
+    case "IMMEDIATE":
+      return "Masukkan sasaran immediate...";
+    case "OUTPUT":
+      return "Masukkan output...";
+    default:
+      return "Masukkan tujuan / sasaran...";
+  }
+}
+
+function getNodeIndicatorPlaceholder(level) {
+  switch (level) {
+    case "ULTIMATE":
+      return "Masukkan indikator ultimate...";
+    case "IMMEDIATE":
+      return "Masukkan indikator immediate...";
+    case "OUTPUT":
+      return "Masukkan indikator output...";
+    default:
+      return "Masukkan indikator...";
+  }
+}
+
 function downloadExcel(tree, tahun, unitKerja) {
-  const rowsForNode = (node, level) => [
-    [level, node.title, node.indicator],
-    ...(node.children || []).flatMap((child) => rowsForNode(child, child.level)),
-  ];
+  const rowsForNode = (node, level) => {
+    const indicatorText = Array.isArray(node.indicators) && node.indicators.length > 0
+      ? node.indicators.join("; ")
+      : (node.indicator || "");
+    return [
+      [level, node.title, indicatorText],
+      ...(node.children || []).flatMap((child) => rowsForNode(child, child.level)),
+    ];
+  };
   const rows = [
     ["Level", "Tujuan / Sasaran", "Indikator"],
     ...rowsForNode(tree, "ULTIMATE"),
@@ -117,7 +186,10 @@ function printNode(level, node) {
   const bidangBadge = level === "INTERMEDIATE" && node.bidang
     ? `<div style="padding:4px;background:#e0edff;color:#1e40af;font-size:9px;font-weight:bold;text-transform:capitalize">Bidang ${escapeHtml(node.bidang)}</div>`
     : "";
-  return `<div class="node" style="border-color:${colors[0]};-webkit-print-color-adjust:exact;print-color-adjust:exact"><div class="head" style="background:${colors[1]};color:#fff;-webkit-print-color-adjust:exact;print-color-adjust:exact">${escapeHtml(node.title)}</div>${bidangBadge}<div class="indicator">${escapeHtml(node.indicator || "Belum ada indikator")}</div></div>`;
+  const indicatorHtml = level === "INTERMEDIATE" && Array.isArray(node.indicators) && node.indicators.length > 1
+    ? `<ul style="margin:0;padding-left:14px;text-align:left">${node.indicators.map((i) => `<li>${escapeHtml(i)}</li>`).join("")}</ul>`
+    : escapeHtml(node.indicator || "Belum ada indikator");
+  return `<div class="node" style="border-color:${colors[0]};-webkit-print-color-adjust:exact;print-color-adjust:exact"><div class="head" style="background:${colors[1]};color:#fff;-webkit-print-color-adjust:exact;print-color-adjust:exact">${escapeHtml(node.title)}</div>${bidangBadge}<div class="indicator">${indicatorHtml}</div></div>`;
 }
 
 function TreeNode({ node, level, selected, onSelect, domRef }) {
@@ -143,7 +215,20 @@ function TreeNode({ node, level, selected, onSelect, domRef }) {
           {bidangLabel}
         </span>
       )}
-      <span className="min-h-[37px] border-t border-slate-200 px-3 py-2 text-[10px] leading-tight text-slate-600">{node.indicator || "Belum ada indikator"}</span>
+      {nodeLevel === "INTERMEDIATE" && Array.isArray(node.indicators) && node.indicators.length > 1 ? (
+        <div className="min-h-[37px] border-t border-slate-200 px-3 py-2 text-[10px] leading-tight text-slate-600 text-left space-y-1">
+          {node.indicators.map((ind, idx) => (
+            <div key={idx} className="flex items-start gap-1">
+              <span className="font-bold text-blue-700 shrink-0">{idx + 1}.</span>
+              <span className="break-words">{ind}</span>
+            </div>
+          ))}
+        </div>
+      ) : (
+        <span className="min-h-[37px] border-t border-slate-200 px-3 py-2 text-[10px] leading-tight text-slate-600 whitespace-pre-line text-center">
+          {node.indicator || "Belum ada indikator"}
+        </span>
+      )}
       <span className="absolute -right-2 -top-2 hidden h-5 w-5 items-center justify-center rounded-full bg-blue-950 text-xs text-white group-hover:flex">✎</span>
     </button>
   );
@@ -162,7 +247,7 @@ function TreeConnectors({ containerRef, nodeRefs, edges }) {
       const containerRect = container.getBoundingClientRect();
       const nextLines = [];
 
-      edges.forEach(({ fromId, toId, orthogonal }) => {
+      edges.forEach(({ fromId, toId, orthogonal, hasArrow = true }) => {
         const a = nodeRefs.current[fromId];
         const b = nodeRefs.current[toId];
         if (!a || !b) return;
@@ -171,6 +256,7 @@ function TreeConnectors({ containerRef, nodeRefs, edges }) {
         nextLines.push({
           key: `${fromId}=>${toId}`,
           orthogonal: !!orthogonal,
+          hasArrow: hasArrow !== false,
           x1: rectA.left + rectA.width / 2 - containerRect.left,
           y1: rectA.bottom - containerRect.top,
           x2: rectB.left + rectB.width / 2 - containerRect.left,
@@ -214,7 +300,7 @@ function TreeConnectors({ containerRef, nodeRefs, edges }) {
             fill="none"
             stroke="#94a3b8"
             strokeWidth="1.5"
-            markerEnd="url(#tree-arrow)"
+            markerEnd={line.hasArrow ? "url(#tree-arrow)" : undefined}
           />
         ) : (
           <line
@@ -225,7 +311,7 @@ function TreeConnectors({ containerRef, nodeRefs, edges }) {
             y2={line.y2}
             stroke="#94a3b8"
             strokeWidth="1.5"
-            markerEnd="url(#tree-arrow)"
+            markerEnd={line.hasArrow ? "url(#tree-arrow)" : undefined}
           />
         )
       ))}
@@ -267,7 +353,13 @@ function EditablePohonKinerja() {
 
   // Modal edit node (setiap perubahan langsung tersimpan ke server, tanpa tombol Simpan Perubahan)
   const [showEditModal, setShowEditModal] = useState(false);
-  const [editForm, setEditForm] = useState({ title: "", indicator: "", level: "ULTIMATE", bidang: "komunikasi" });
+  const [editForm, setEditForm] = useState({
+    title: "",
+    indicator: "",
+    indicators: [""],
+    level: "ULTIMATE",
+    bidang: "komunikasi",
+  });
   const [savingNode, setSavingNode] = useState(false);
   const [addingNode, setAddingNode] = useState(false);
 
@@ -276,6 +368,7 @@ function EditablePohonKinerja() {
   const [newIntermediateForm, setNewIntermediateForm] = useState({
     title: "",
     indicator: "",
+    indicators: [""],
     bidang: "komunikasi",
   });
   const [addingIntermediate, setAddingIntermediate] = useState(false);
@@ -329,11 +422,11 @@ function EditablePohonKinerja() {
   const ultimateId = tree.id || "ultimate";
   const edges = [];
   tree.branches.forEach((branch) => {
-    edges.push({ fromId: ultimateId, toId: branch.id, orthogonal: true });
+    edges.push({ fromId: ultimateId, toId: branch.id, orthogonal: true, hasArrow: true });
     (branch.children || []).forEach((child) => {
-      edges.push({ fromId: branch.id, toId: child.id, orthogonal: true });
+      edges.push({ fromId: branch.id, toId: child.id, orthogonal: true, hasArrow: true });
       (child.children || []).forEach((output) => {
-        edges.push({ fromId: child.id, toId: output.id });
+        edges.push({ fromId: child.id, toId: output.id, hasArrow: true });
       });
     });
   });
@@ -511,15 +604,94 @@ function EditablePohonKinerja() {
   // Membuka modal edit untuk node yang diklik
   const openEditModal = (node, level) => {
     const nodeLevel = node.level || level;
-    setSelected({ ...node, level: nodeLevel });
+    const isNew = Boolean(node.isNew);
+    const parsedIndicators = parseIndicators(node.indicators, node.indicator);
+
+    // Jika node baru atau masih berisi teks dummy bawaan, kosongkan agar placeholder tampil
+    const hasDefaultTitle = isNew || isDefaultTitle(node.title);
+    const initialTitle = hasDefaultTitle ? "" : (node.title || "");
+
+    const hasDefaultInd =
+      isNew ||
+      isDefaultIndicator(node.indicator) ||
+      (parsedIndicators.length === 1 && isDefaultIndicator(parsedIndicators[0]));
+    const initialIndicators = hasDefaultInd
+      ? [""]
+      : (parsedIndicators.length > 0 ? parsedIndicators : [""]);
+    const initialIndicator = hasDefaultInd ? "" : (node.indicator || "");
+
+    setSelected({ ...node, level: nodeLevel, indicators: parsedIndicators });
     setEditForm({
-      title: node.title || "",
-      indicator: node.indicator || "",
+      title: initialTitle,
+      indicator: initialIndicator,
+      indicators: initialIndicators,
       level: nodeLevel,
       bidang: node.bidang || "komunikasi",
     });
     setShowEditModal(true);
     setErrorData("");
+  };
+
+  const handleIndicatorChange = (index, value) => {
+    setEditForm((current) => {
+      const updated = [...(current.indicators || [""])];
+      updated[index] = value;
+      return {
+        ...current,
+        indicators: updated,
+        indicator: updated.map((i) => i.trim()).filter(Boolean).join("\n"),
+      };
+    });
+  };
+
+  const handleAddIndicatorField = () => {
+    setEditForm((current) => ({
+      ...current,
+      indicators: [...(current.indicators || [""]), ""],
+    }));
+  };
+
+  const handleRemoveIndicatorField = (index) => {
+    setEditForm((current) => {
+      const updated = (current.indicators || [""]).filter((_, i) => i !== index);
+      const safeUpdated = updated.length > 0 ? updated : [""];
+      return {
+        ...current,
+        indicators: safeUpdated,
+        indicator: safeUpdated.map((i) => i.trim()).filter(Boolean).join("\n"),
+      };
+    });
+  };
+
+  const handleNewIntermediateIndicatorChange = (index, value) => {
+    setNewIntermediateForm((current) => {
+      const updated = [...(current.indicators || [""])];
+      updated[index] = value;
+      return {
+        ...current,
+        indicators: updated,
+        indicator: updated.map((i) => i.trim()).filter(Boolean).join("\n"),
+      };
+    });
+  };
+
+  const handleAddNewIntermediateIndicatorField = () => {
+    setNewIntermediateForm((current) => ({
+      ...current,
+      indicators: [...(current.indicators || [""]), ""],
+    }));
+  };
+
+  const handleRemoveNewIntermediateIndicatorField = (index) => {
+    setNewIntermediateForm((current) => {
+      const updated = (current.indicators || [""]).filter((_, i) => i !== index);
+      const safeUpdated = updated.length > 0 ? updated : [""];
+      return {
+        ...current,
+        indicators: safeUpdated,
+        indicator: safeUpdated.map((i) => i.trim()).filter(Boolean).join("\n"),
+      };
+    });
   };
 
   // Menyimpan node baru langsung ke server (tanpa tombol Simpan Perubahan)
@@ -580,7 +752,7 @@ function EditablePohonKinerja() {
 
       setTree((current) => insertNodeIntoTree(current, target, newNode));
       // Langsung buka modal supaya node baru bisa diberi nama/indikator.
-      openEditModal(newNode, nodeLevel);
+      openEditModal({ ...newNode, isNew: true }, nodeLevel);
     } catch (error) {
       setErrorData(error.message || "Gagal menambahkan node");
     } finally {
@@ -601,6 +773,7 @@ function EditablePohonKinerja() {
     setNewIntermediateForm({
       title: "",
       indicator: "",
+      indicators: [""],
       bidang: "komunikasi",
     });
     setShowAddIntermediateModal(true);
@@ -619,6 +792,12 @@ function EditablePohonKinerja() {
       const rawUltimateId = tree?.id ? String(tree.id).replace(/^[a-z]+-/, "") : null;
       const parentId = rawUltimateId && !isNaN(rawUltimateId) ? Number(rawUltimateId) : pohonKinerjaData.pohon_kinerja_id;
 
+      const cleanedIndicators = (newIntermediateForm.indicators || [newIntermediateForm.indicator])
+        .map((i) => i.trim())
+        .filter(Boolean);
+      const finalIndicators = cleanedIndicators.length > 0 ? cleanedIndicators : ["Tambahkan indikator"];
+      const finalIndicator = finalIndicators.join("\n");
+
       const response = await fetch("http://localhost:8000/api/pohon-kinerja/node", {
         method: "POST",
         headers: getAuthHeaders({ Accept: "application/json", "Content-Type": "application/json" }),
@@ -627,7 +806,8 @@ function EditablePohonKinerja() {
           pohon_kinerja_id: pohonKinerjaData.pohon_kinerja_id,
           parent_id: parentId,
           title: newIntermediateForm.title.trim(),
-          indicator: newIntermediateForm.indicator.trim() || "Tambahkan indikator",
+          indicator: finalIndicator,
+          indicators: finalIndicators,
           bidang: newIntermediateForm.bidang,
         }),
       });
@@ -640,7 +820,8 @@ function EditablePohonKinerja() {
         id: `intermediate-${data.data.id}`,
         level: "INTERMEDIATE",
         title: data.data.sasaran || newIntermediateForm.title.trim(),
-        indicator: data.data.indikator_sasaran || newIntermediateForm.indicator.trim() || "Tambahkan indikator",
+        indicator: data.data.indikator_sasaran || finalIndicator,
+        indicators: data.data.indikator || finalIndicators,
         bidang: data.data.bidang || newIntermediateForm.bidang,
         children: [],
       };
@@ -668,9 +849,31 @@ function EditablePohonKinerja() {
       setErrorData("Pohon Kinerja arsip hanya dapat dilihat. Pulihkan terlebih dahulu untuk mengedit.");
       return;
     }
+
+    const trimmedTitle = (editForm.title || "").trim();
+    if (!trimmedTitle) {
+      setErrorData("Tujuan / Sasaran wajib diisi.");
+      return;
+    }
+
     setSavingNode(true);
     setErrorData("");
     try {
+      let finalIndicator = (editForm.indicator || "").trim();
+      let finalIndicators = editForm.indicators || [];
+
+      if (selected.level === "INTERMEDIATE") {
+        const cleaned = (editForm.indicators || [])
+          .map((i) => i.trim())
+          .filter(Boolean);
+        finalIndicators = cleaned.length > 0 ? cleaned : ["Tambahkan indikator"];
+        finalIndicator = finalIndicators.join("\n");
+      } else {
+        if (!finalIndicator) {
+          finalIndicator = "Tambahkan indikator";
+        }
+      }
+
       if (selected.level !== "ULTIMATE") {
         const [level, idString] = selected.id.split("-");
         const id = Number(idString);
@@ -678,9 +881,12 @@ function EditablePohonKinerja() {
           throw new Error("ID node tidak valid.");
         }
         const payload = {
-          title: editForm.title || "",
-          indicator: editForm.indicator || "",
-          ...(selected.level === "INTERMEDIATE" ? { bidang: editForm.bidang || "komunikasi" } : {}),
+          title: trimmedTitle,
+          indicator: finalIndicator,
+          ...(selected.level === "INTERMEDIATE" ? {
+            indicators: finalIndicators,
+            bidang: editForm.bidang || "komunikasi"
+          } : {}),
         };
         const response = await fetch(`http://localhost:8000/api/pohon-kinerja/node/${level}/${id}`, {
           method: "PUT",
@@ -694,8 +900,9 @@ function EditablePohonKinerja() {
       }
 
       const patch = {
-        title: editForm.title,
-        indicator: editForm.indicator,
+        title: trimmedTitle,
+        indicator: finalIndicator,
+        indicators: finalIndicators,
         ...(selected.level === "INTERMEDIATE" ? { bidang: editForm.bidang } : {}),
       };
 
@@ -1382,6 +1589,7 @@ function EditablePohonKinerja() {
               <textarea
                 value={editForm.title}
                 onChange={(event) => setEditForm((current) => ({ ...current, title: event.target.value }))}
+                placeholder={getNodeTitlePlaceholder(selected?.level)}
                 rows="4"
                 readOnly={isArchivedView || !isAdmin}
                 disabled={savingNode || deletingNode}
@@ -1389,17 +1597,84 @@ function EditablePohonKinerja() {
               />
             </label>
 
-            <label className="flex flex-col gap-1 text-xs font-semibold uppercase tracking-wider text-slate-500">
-              Indikator
-              <textarea
-                value={editForm.indicator}
-                onChange={(event) => setEditForm((current) => ({ ...current, indicator: event.target.value }))}
-                rows="3"
-                readOnly={isArchivedView || !isAdmin}
-                disabled={savingNode || deletingNode}
-                className="resize-y rounded border border-slate-300 p-2 text-sm font-normal normal-case tracking-normal text-slate-700 outline-none focus:border-blue-950 disabled:bg-slate-100"
-              />
-            </label>
+            {selected.level === "INTERMEDIATE" ? (
+              <div className="flex flex-col gap-2">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-semibold uppercase tracking-wider text-slate-500">
+                    Indikator ({editForm.indicators?.length || 1})
+                  </span>
+                  {!isArchivedView && isAdmin && (
+                    <button
+                      type="button"
+                      onClick={handleAddIndicatorField}
+                      disabled={savingNode || deletingNode}
+                      className="inline-flex items-center gap-1 rounded bg-blue-50 px-2.5 py-1 text-xs font-semibold text-blue-900 hover:bg-blue-100 transition border border-blue-200"
+                    >
+                      <span className="material-symbols-outlined text-[15px]">add</span>
+                      Tambah Indikator
+                    </button>
+                  )}
+                </div>
+
+                <div className="space-y-2 max-h-60 overflow-y-auto pr-1">
+                  {(editForm.indicators || [""]).map((ind, idx) => (
+                    <div
+                      key={idx}
+                      className="flex items-start gap-2 rounded-lg border border-slate-200 bg-slate-50/70 p-2.5"
+                    >
+                      <span className="mt-2 flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-blue-100 text-[10px] font-bold text-blue-900">
+                        {idx + 1}
+                      </span>
+                      <textarea
+                        value={ind}
+                        onChange={(event) => handleIndicatorChange(idx, event.target.value)}
+                        placeholder={`Masukkan indikator ke-${idx + 1}...`}
+                        rows="2"
+                        readOnly={isArchivedView || !isAdmin}
+                        disabled={savingNode || deletingNode}
+                        className="flex-1 resize-y rounded border border-slate-300 bg-white p-2 text-sm font-normal normal-case tracking-normal text-slate-700 outline-none focus:border-blue-950 disabled:bg-slate-100"
+                      />
+                      {!isArchivedView && isAdmin && editForm.indicators?.length > 1 && (
+                        <button
+                          type="button"
+                          onClick={() => handleRemoveIndicatorField(idx)}
+                          disabled={savingNode || deletingNode}
+                          title="Hapus indikator"
+                          className="mt-1.5 p-1 text-slate-400 hover:text-red-600 rounded transition hover:bg-red-50"
+                        >
+                          <span className="material-symbols-outlined text-[18px]">delete</span>
+                        </button>
+                      )}
+                    </div>
+                  ))}
+                </div>
+
+                {!isArchivedView && isAdmin && (
+                  <button
+                    type="button"
+                    onClick={handleAddIndicatorField}
+                    disabled={savingNode || deletingNode}
+                    className="flex w-full items-center justify-center gap-1.5 rounded-lg border-2 border-dashed border-blue-200 bg-blue-50/40 py-2 text-xs font-semibold text-blue-800 hover:border-blue-300 hover:bg-blue-50 transition"
+                  >
+                    <span className="material-symbols-outlined text-[16px]">add_circle</span>
+                    Tambah Kolom Indikator
+                  </button>
+                )}
+              </div>
+            ) : (
+              <label className="flex flex-col gap-1 text-xs font-semibold uppercase tracking-wider text-slate-500">
+                Indikator
+                <textarea
+                  value={editForm.indicator}
+                  onChange={(event) => setEditForm((current) => ({ ...current, indicator: event.target.value }))}
+                  placeholder={getNodeIndicatorPlaceholder(selected?.level)}
+                  rows="3"
+                  readOnly={isArchivedView || !isAdmin}
+                  disabled={savingNode || deletingNode}
+                  className="resize-y rounded border border-slate-300 p-2 text-sm font-normal normal-case tracking-normal text-slate-700 outline-none focus:border-blue-950 disabled:bg-slate-100"
+                />
+              </label>
+            )}
           </div>
 
           <div className="flex gap-3 border-t border-slate-200 bg-slate-50 p-6">
@@ -1504,19 +1779,66 @@ function EditablePohonKinerja() {
               />
             </label>
 
-            <label className="flex flex-col gap-1 text-xs font-semibold uppercase tracking-wider text-slate-500">
-              Indikator Sasaran
-              <textarea
-                value={newIntermediateForm.indicator}
-                onChange={(event) =>
-                  setNewIntermediateForm((current) => ({ ...current, indicator: event.target.value }))
-                }
-                rows="3"
-                placeholder="Masukkan indikator sasaran..."
+            <div className="flex flex-col gap-2">
+              <div className="flex items-center justify-between">
+                <span className="text-xs font-semibold uppercase tracking-wider text-slate-500">
+                  Indikator Sasaran ({newIntermediateForm.indicators?.length || 1})
+                </span>
+                <button
+                  type="button"
+                  onClick={handleAddNewIntermediateIndicatorField}
+                  disabled={addingIntermediate}
+                  className="inline-flex items-center gap-1 rounded bg-blue-50 px-2.5 py-1 text-xs font-semibold text-blue-900 hover:bg-blue-100 transition border border-blue-200"
+                >
+                  <span className="material-symbols-outlined text-[15px]">add</span>
+                  Tambah Indikator
+                </button>
+              </div>
+
+              <div className="space-y-2 max-h-60 overflow-y-auto pr-1">
+                {(newIntermediateForm.indicators || [""]).map((ind, idx) => (
+                  <div
+                    key={idx}
+                    className="flex items-start gap-2 rounded-lg border border-slate-200 bg-slate-50/70 p-2.5"
+                  >
+                    <span className="mt-2 flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-blue-100 text-[10px] font-bold text-blue-900">
+                      {idx + 1}
+                    </span>
+                    <textarea
+                      value={ind}
+                      onChange={(event) =>
+                        handleNewIntermediateIndicatorChange(idx, event.target.value)
+                      }
+                      placeholder={`Masukkan indikator sasaran ke-${idx + 1}...`}
+                      rows="2"
+                      disabled={addingIntermediate}
+                      className="flex-1 resize-y rounded border border-slate-300 bg-white p-2 text-sm font-normal normal-case tracking-normal text-slate-700 outline-none focus:border-blue-950 disabled:bg-slate-100"
+                    />
+                    {newIntermediateForm.indicators?.length > 1 && (
+                      <button
+                        type="button"
+                        onClick={() => handleRemoveNewIntermediateIndicatorField(idx)}
+                        disabled={addingIntermediate}
+                        title="Hapus indikator"
+                        className="mt-1.5 p-1 text-slate-400 hover:text-red-600 rounded transition hover:bg-red-50"
+                      >
+                        <span className="material-symbols-outlined text-[18px]">delete</span>
+                      </button>
+                    )}
+                  </div>
+                ))}
+              </div>
+
+              <button
+                type="button"
+                onClick={handleAddNewIntermediateIndicatorField}
                 disabled={addingIntermediate}
-                className="resize-y rounded border border-slate-300 p-2 text-sm font-normal normal-case tracking-normal text-slate-700 outline-none focus:border-blue-950 disabled:bg-slate-100"
-              />
-            </label>
+                className="flex w-full items-center justify-center gap-1.5 rounded-lg border-2 border-dashed border-blue-200 bg-blue-50/40 py-2 text-xs font-semibold text-blue-800 hover:border-blue-300 hover:bg-blue-50 transition"
+              >
+                <span className="material-symbols-outlined text-[16px]">add_circle</span>
+                Tambah Kolom Indikator
+              </button>
+            </div>
           </div>
 
           <div className="flex gap-3 border-t border-slate-200 bg-slate-50 p-6">

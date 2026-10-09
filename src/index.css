@@ -75,34 +75,4 @@
     align-items: flex-start;
     gap: 32px;
   }
-
-  #performance-tree section > div > div:nth-child(3)::after,
-  #performance-tree section > div > div:nth-child(2) > div:nth-child(2)::after,
-  #performance-tree section > div > div:nth-child(3) > div > div:first-child::after {
-    content: "";
-    position: absolute;
-    width: 0;
-    height: 0;
-    border-left: 5px solid transparent;
-    border-right: 5px solid transparent;
-    border-top: 7px solid #64748b;
-  }
-
-  #performance-tree section > div > div:nth-child(2) > div:nth-child(2),
-  #performance-tree section > div > div:nth-child(3) > div > div:first-child {
-    position: relative;
-  }
-
-  #performance-tree section > div > div:nth-child(3)::after {
-    top: -3px;
-    left: 50%;
-    transform: translateX(-50%);
-  }
-
-  #performance-tree section > div > div:nth-child(2) > div:nth-child(2)::after,
-  #performance-tree section > div > div:nth-child(3) > div > div:first-child::after {
-    bottom: -1px;
-    left: 50%;
-    transform: translateX(-50%);
-  }
 }
