@@ -62,6 +62,45 @@ function formatBidang(value) {
 }
 
 /* =========================================================
+   INDIKATOR INTERMEDIATE (bisa lebih dari satu)
+   Tiap indikator punya target & satuan sendiri. Bentuk data:
+   [{ indicator, target, satuan }, ...]
+========================================================= */
+
+// "75" + "indeks" -> "75 indeks"; kalau dua-duanya kosong -> "".
+function formatTargetSatuan(target, satuan) {
+  return [target, satuan]
+    .map((part) => String(part ?? "").trim())
+    .filter(Boolean)
+    .join(" ");
+}
+
+// Nomor hanya ditampilkan kalau indikatornya lebih dari satu.
+function indicatorLabel(base, index, total) {
+  return total > 1 ? `${base} ${index + 1}` : base;
+}
+
+// Susun pasangan field Detail: Indikator n, Target / Satuan n.
+function buildIndicatorDetailFields(indicators) {
+  const rows = Array.isArray(indicators) ? indicators : [];
+
+  if (rows.length === 0) {
+    return [
+      ["Indikator", ""],
+      ["Target / Satuan", ""],
+    ];
+  }
+
+  return rows.flatMap((row, index) => [
+    [indicatorLabel("Indikator", index, rows.length), row.indicator],
+    [
+      indicatorLabel("Target / Satuan", index, rows.length),
+      formatTargetSatuan(row.target, row.satuan),
+    ],
+  ]);
+}
+
+/* =========================================================
    HITUNG JUMLAH BARIS
    (1 baris tabel = 1 Output. Sub Kegiatan sudah nempel jadi
    bagian dari Output, jadi tidak menambah baris lagi.)
@@ -115,11 +154,11 @@ const EXPORT_HEADER = [
   "Indikator",
   "Target/ Satuan",
   "Output/ Input",
+  "Anggaran",
   "Sub Kegiatan",
   "Nomenklatur SIPD",
   "Indikator",
   "Target/ Satuan",
-  "Anggaran",
 ];
 
 // Warna ARGB persis seperti file referensi (casecading-1_terisi_intermediate).
@@ -130,15 +169,15 @@ const COLOR_ORANGE = "FFFFC000";
 const COLOR_GRAY = "FFD8D8D8";
 const COLOR_YELLOW = "FFFFCC29";
 
-// Warna header per kolom (index 0 = kolom A ... index 22 = kolom W).
+// Warna header per kolom (index 0 = kolom A ... index 23 = kolom X).
 const HEADER_COLORS = [
   COLOR_RED, COLOR_RED, COLOR_RED, COLOR_RED, // Ultimate Outcome, Tujuan, Indikator, Target
   COLOR_BLUE, COLOR_RED, COLOR_RED, COLOR_RED, // Intermediate Outcome, Sasaran, Indikator, Target
   COLOR_GREEN, COLOR_BLUE, COLOR_BLUE, COLOR_BLUE, COLOR_BLUE, // Immediate Outcome, Program, Nomenklatur, Indikator, Target
   COLOR_ORANGE, COLOR_GREEN, COLOR_GREEN, COLOR_GREEN, COLOR_GREEN, // Output, Kegiatan, Nomenklatur, Indikator, Target
   COLOR_GRAY, // Output/ Input
-  COLOR_YELLOW, COLOR_YELLOW, COLOR_YELLOW, COLOR_YELLOW, // Sub Kegiatan, Nomenklatur, Indikator, Target
   COLOR_GRAY, // Anggaran
+  COLOR_YELLOW, COLOR_YELLOW, COLOR_YELLOW, COLOR_YELLOW, // Sub Kegiatan, Nomenklatur, Indikator, Target
 ];
 
 // Di baris DATA, cuma 4 kolom "nama" (Ultimate/Intermediate/Immediate/Output)
@@ -152,7 +191,7 @@ const DATA_NAME_COLUMN_COLORS = {
 
 // Lebar kolom (wch) persis mengikuti file referensi.
 const EXPORT_COLUMN_WIDTHS = [
-  18, 14, 14, 18, 38, 30, 13, 18, 26, 21, 19, 18, 19, 27, 23, 21, 17, 18, 20, 20, 19, 26, 17, 17,
+  18, 14, 14, 18, 38, 30, 13, 18, 26, 21, 19, 18, 19, 27, 23, 21, 17, 18, 20, 17, 20, 19, 26, 17,
 ];
 
 const THIN_BORDER = {
@@ -182,10 +221,17 @@ function dataCellStyle(bgColor) {
   };
 }
 
+// Jumlah kolom dari "Immediate Outcome" sampai "Target/ Satuan" Sub Kegiatan.
+const EXPORT_RIGHT_COLUMN_COUNT = 16;
+
 /**
- * Susun baris export. Nilai induk (Ultimate, Intermediate, Immediate,
- * Output) DIULANG di setiap baris turunannya — tidak dikosongkan —
- * persis seperti format file referensi (tanpa merge cell).
+ * Susun baris export. Nilai induk (Ultimate, Intermediate) DIULANG di
+ * setiap baris turunannya — tidak dikosongkan, tanpa merge cell.
+ *
+ * Kalau 1 Intermediate punya lebih dari 1 indikator, indikator ke-2 dst.
+ * ditumpuk KE BAWAH di kolom Indikator / Target yang sama, masih di blok
+ * Intermediate yang sama. Indikator dan Output dibagi rata ke semua baris
+ * blok itu, jadi tidak ada baris/sel yang kosong.
  */
 function buildExportRows(renstraList) {
   const rows = [];
@@ -195,12 +241,15 @@ function buildExportRows(renstraList) {
 
     const intermediates = renstra.intermediates.length
       ? renstra.intermediates
-      : [{ id: "empty", title: "", sasaran: "", indicator: "", target: "", immediates: [] }];
+      : [{ id: "empty", title: "", sasaran: "", indicators: [], immediates: [] }];
 
     intermediates.forEach((intermediate) => {
       const immediates = intermediate.immediates.length
         ? intermediate.immediates
         : [{ id: "empty", title: "", program: "", nomenklaturSipd: "", indicator: "", target: "", outputs: [] }];
+
+      // 1) Kumpulkan bagian kanan (Immediate -> Sub Kegiatan), 1 item per Output.
+      const rightParts = [];
 
       immediates.forEach((immediate) => {
         const outputs = immediate.outputs.length
@@ -210,15 +259,7 @@ function buildExportRows(renstraList) {
         outputs.forEach((output) => {
           const sub = output.subKegiatan?.[0] || {};
 
-          rows.push([
-            ultimate.title || "",
-            ultimate.tujuan || "",
-            ultimate.indicator || "",
-            ultimate.target || "",
-            intermediate.title || "",
-            intermediate.sasaran || "",
-            intermediate.indicator || "",
-            intermediate.target || "",
+          rightParts.push([
             immediate.title || "",
             immediate.program || "",
             immediate.nomenklaturSipd || "",
@@ -230,14 +271,45 @@ function buildExportRows(renstraList) {
             output.indicator || "",
             output.target || "",
             output.outputInput || "",
+            Number(output.anggaran) || 0,
             sub.title || "",
             sub.nomenklaturSipd || "",
             sub.indicator || "",
             sub.target || "",
-            Number(output.anggaran) || 0,
           ]);
         });
       });
+
+      // 2) Bagi rata: indikator & Output dibagi ke seluruh baris Intermediate
+      //    ini, jadi tidak ada baris yang kosong.
+      //    Contoh 4 Output + 2 indikator -> baris 1-2 indikator 1, baris 3-4 indikator 2.
+      //    Contoh 1 Output + 2 indikator -> 2 baris, Output-nya diulang.
+      const indicators = intermediate.indicators || [];
+      const totalRows = Math.max(rightParts.length, indicators.length, 1);
+
+      for (let i = 0; i < totalRows; i++) {
+        const indicatorRow = indicators.length
+          ? indicators[Math.floor((i * indicators.length) / totalRows)]
+          : null;
+
+        const rightPart = rightParts.length
+          ? rightParts[Math.floor((i * rightParts.length) / totalRows)]
+          : Array(EXPORT_RIGHT_COLUMN_COUNT).fill("");
+
+        rows.push([
+          ultimate.title || "",
+          ultimate.tujuan || "",
+          ultimate.indicator || "",
+          ultimate.target || "",
+          intermediate.title || "",
+          intermediate.sasaran || "",
+          indicatorRow?.indicator || "",
+          indicatorRow
+            ? formatTargetSatuan(indicatorRow.target, indicatorRow.satuan)
+            : "",
+          ...rightPart,
+        ]);
+      }
     });
   });
 
@@ -245,7 +317,7 @@ function buildExportRows(renstraList) {
 }
 
 // Index kolom "Anggaran" di EXPORT_HEADER — dipakai buat format angka.
-const ANGGARAN_COLUMN_INDEX = 23;
+const ANGGARAN_COLUMN_INDEX = 19;
 
 function exportRenstraToExcel(renstraList, year) {
   const dataRows = buildExportRows(renstraList);
@@ -266,8 +338,13 @@ function exportRenstraToExcel(renstraList, year) {
           ? headerCellStyle(HEADER_COLORS[colIndex])
           : dataCellStyle(DATA_NAME_COLUMN_COLORS[colIndex]);
 
-      // Kolom Anggaran di baris data: format angka ribuan.
-      if (rowIndex > 0 && colIndex === ANGGARAN_COLUMN_INDEX) {
+      // Kolom Anggaran di baris data: format angka ribuan
+      // (hanya kalau isinya angka, baris tambahan yang kosong dibiarkan).
+      if (
+        rowIndex > 0 &&
+        colIndex === ANGGARAN_COLUMN_INDEX &&
+        typeof worksheet[cellRef].v === "number"
+      ) {
         worksheet[cellRef].s.numFmt = "#,##0";
         worksheet[cellRef].t = "n";
       }
@@ -342,8 +419,7 @@ function DetailModal({ data, level, onClose, onEdit }) {
       ["Intermediate Outcome", data.title],
       ["Bidang", formatBidang(data.bidang)],
       ["Sasaran", data.sasaran],
-      ["Indikator", data.indicator],
-      ["Target / Satuan", data.target],
+      ...buildIndicatorDetailFields(data.indicators),
     ],
 
     "IMMEDIATE OUTCOME": [
@@ -361,11 +437,11 @@ function DetailModal({ data, level, onClose, onEdit }) {
       ["Indikator", data.indicator],
       ["Target / Satuan", data.target],
       ["Output/ Input", data.outputInput],
+      ["Anggaran", formatRupiah(data.anggaran)],
       ["Sub Kegiatan", sub.title],
       ["Nomenklatur SIPD", sub.nomenklaturSipd],
       ["Indikator", sub.indicator],
       ["Target / Satuan", sub.target],
-      ["Anggaran", formatRupiah(data.anggaran)], // dipindah ke paling bawah
     ],
   };
 
@@ -470,13 +546,40 @@ function FormModal({ data, level, saving, onClose, onSave }) {
     subKegiatanNomenklaturSipd: sub.nomenklaturSipd || "",
     subKegiatanIndicator: sub.indicator || "",
     subKegiatanTarget: sub.target || "",
+
+    // Khusus Intermediate: salinan daftar indikator (+ target/satuan tiap indikator).
+    indicatorRows: Array.isArray(data?.indicators)
+      ? data.indicators.map((row) => ({
+          indicator: row.indicator || "",
+          target: row.target || "",
+          satuan: row.satuan || "",
+        }))
+      : [],
   });
 
   const changeField = (field, value) => {
     setForm((current) => ({ ...current, [field]: value }));
   };
 
+  const changeIndicatorRow = (index, field, value) => {
+    setForm((current) => ({
+      ...current,
+      indicatorRows: current.indicatorRows.map((row, rowIndex) =>
+        rowIndex === index ? { ...row, [field]: value } : row
+      ),
+    }));
+  };
+
   const handleSubmit = () => {
+    // Indikator tidak boleh dikosongkan, karena urutannya berpasangan dengan target/satuan.
+    if (
+      level === "INTERMEDIATE OUTCOME" &&
+      form.indicatorRows.some((row) => !row.indicator.trim())
+    ) {
+      alert("Indikator tidak boleh kosong.");
+      return;
+    }
+
     onSave(form);
   };
 
@@ -575,7 +678,73 @@ function FormModal({ data, level, saving, onClose, onSave }) {
             )}
 
             {/* INDIKATOR & TARGET — dipakai semua level kecuali OUTPUT (OUTPUT taruh setelah Output/Input) */}
-            {level !== "OUTPUT" && (
+            {level === "INTERMEDIATE OUTCOME" && (
+              <>
+                {form.indicatorRows.length === 0 && (
+                  <p className="rounded-md border border-dashed border-slate-300 bg-slate-50 p-3 text-xs text-slate-500">
+                    Intermediate ini belum punya indikator. Tambahkan indikator
+                    di halaman Pohon Kinerja, lalu kolom target dan satuannya
+                    akan muncul di sini otomatis.
+                  </p>
+                )}
+
+                {form.indicatorRows.map((row, index) => (
+                  <div
+                    key={index}
+                    className="space-y-3 rounded-lg border border-slate-200 bg-slate-50 p-4"
+                  >
+                    <div>
+                      <label className="mb-1 block text-xs font-semibold uppercase tracking-wider text-slate-500">
+                        {indicatorLabel("Indikator", index, form.indicatorRows.length)}
+                      </label>
+                      <textarea
+                        value={row.indicator}
+                        onChange={(event) =>
+                          changeIndicatorRow(index, "indicator", event.target.value)
+                        }
+                        rows={2}
+                        placeholder="Masukkan indikator..."
+                        className="w-full resize-y rounded-md border border-slate-300 bg-white p-3 text-sm text-slate-700 outline-none transition focus:border-blue-950 focus:ring-2 focus:ring-blue-950/20"
+                      />
+                    </div>
+
+                    <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                      <div>
+                        <label className="mb-1 block text-xs font-semibold uppercase tracking-wider text-slate-500">
+                          {indicatorLabel("Target", index, form.indicatorRows.length)}
+                        </label>
+                        <input
+                          type="text"
+                          value={row.target}
+                          onChange={(event) =>
+                            changeIndicatorRow(index, "target", event.target.value)
+                          }
+                          placeholder="Contoh: 75"
+                          className="w-full rounded-md border border-slate-300 bg-white p-3 text-sm text-slate-700 outline-none transition focus:border-blue-950 focus:ring-2 focus:ring-blue-950/20"
+                        />
+                      </div>
+
+                      <div>
+                        <label className="mb-1 block text-xs font-semibold uppercase tracking-wider text-slate-500">
+                          {indicatorLabel("Satuan", index, form.indicatorRows.length)}
+                        </label>
+                        <input
+                          type="text"
+                          value={row.satuan}
+                          onChange={(event) =>
+                            changeIndicatorRow(index, "satuan", event.target.value)
+                          }
+                          placeholder="Contoh: indeks, %"
+                          className="w-full rounded-md border border-slate-300 bg-white p-3 text-sm text-slate-700 outline-none transition focus:border-blue-950 focus:ring-2 focus:ring-blue-950/20"
+                        />
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </>
+            )}
+
+            {level !== "OUTPUT" && level !== "INTERMEDIATE OUTCOME" && (
               <>
                 <div>
                   <label className="mb-1 block text-xs font-semibold uppercase tracking-wider text-slate-500">
@@ -674,6 +843,20 @@ function FormModal({ data, level, saving, onClose, onSave }) {
 
                 <div>
                   <label className="mb-1 block text-xs font-semibold uppercase tracking-wider text-slate-500">
+                    Anggaran (Rp)
+                  </label>
+                  <input
+                    type="number"
+                    min="0"
+                    value={form.anggaran}
+                    onChange={(event) => changeField("anggaran", event.target.value)}
+                    placeholder="Contoh: 50000000"
+                    className="w-full rounded-md border border-slate-300 p-3 text-sm text-slate-700 outline-none transition focus:border-blue-950 focus:ring-2 focus:ring-blue-950/20"
+                  />
+                </div>
+
+                <div>
+                  <label className="mb-1 block text-xs font-semibold uppercase tracking-wider text-slate-500">
                     Sub Kegiatan
                   </label>
                   <textarea
@@ -720,21 +903,6 @@ function FormModal({ data, level, saving, onClose, onSave }) {
                     value={form.subKegiatanTarget}
                     onChange={(event) => changeField("subKegiatanTarget", event.target.value)}
                     placeholder="Contoh: 100%, 12 Kegiatan"
-                    className="w-full rounded-md border border-slate-300 p-3 text-sm text-slate-700 outline-none transition focus:border-blue-950 focus:ring-2 focus:ring-blue-950/20"
-                  />
-                </div>
-
-                {/* ANGGARAN — paling bawah */}
-                <div>
-                  <label className="mb-1 block text-xs font-semibold uppercase tracking-wider text-slate-500">
-                    Anggaran (Rp)
-                  </label>
-                  <input
-                    type="number"
-                    min="0"
-                    value={form.anggaran}
-                    onChange={(event) => changeField("anggaran", event.target.value)}
-                    placeholder="Contoh: 50000000"
                     className="w-full rounded-md border border-slate-300 p-3 text-sm text-slate-700 outline-none transition focus:border-blue-950 focus:ring-2 focus:ring-blue-950/20"
                   />
                 </div>
@@ -798,10 +966,12 @@ function RenstraTable({ data, archived, loading, onDetail }) {
           {loading && (
             <tr>
               <td colSpan={4} className="px-6 py-12 text-center">
-                <span className="material-symbols-outlined mb-2 block animate-spin text-4xl text-blue-800">
+                <span className="material-symbols-outlined mb-2 block animate-spin text-4xl text-blue-900">
                   progress_activity
                 </span>
-                <p className="text-sm font-semibold text-slate-600">Mengambil data...</p>
+                <p className="text-sm font-semibold text-slate-600">
+                  Sedang mengambil data...
+                </p>
               </td>
             </tr>
           )}
@@ -959,11 +1129,13 @@ function PohonRenstra() {
   const [editData, setEditData] = useState(null);
   const [saving, setSaving] = useState(false);
   const [isArchived, setIsArchived] = useState(false);
-  const [loadingData, setLoadingData] = useState(true);
 
   // Available years state
   const [availableYears, setAvailableYears] = useState([]);
-  const [loadingYears, setLoadingYears] = useState(false);
+  // Mulai dari true: sebelum request pertama selesai, tabel harus menampilkan
+  // "Sedang mencari data...", bukan langsung "Belum ada data".
+  const [loadingYears, setLoadingYears] = useState(true);
+  const [loadingData, setLoadingData] = useState(true);
 
   // Fetch available years on component load
   useEffect(() => {
@@ -997,10 +1169,16 @@ function PohonRenstra() {
   }, []);
 
   useEffect(() => {
+    // Belum ada tahun yang dipilih: tidak ada yang dicari.
     if (!year) {
+      setData([]);
+      setIsArchived(false);
       setLoadingData(false);
       return;
     }
+
+    // Kalau tahun berganti saat request lama masih jalan, hasil request lama diabaikan.
+    let cancelled = false;
 
     const fetchRenstra = async () => {
       setLoadingData(true);
@@ -1014,6 +1192,8 @@ function PohonRenstra() {
         );
 
         const result = await response.json();
+
+        if (cancelled) return;
 
         // Tahun ini sudah diarsipkan — backend balikin status 200
         // dengan flag archived: true dan data kosong.
@@ -1050,20 +1230,28 @@ function PohonRenstra() {
 
         setData(formattedData);
       } catch (error) {
+        if (cancelled) return;
         console.error("Gagal mengambil data Renstra:", error);
         setIsArchived(false);
         setData([]);
       } finally {
-        setLoadingData(false);
+        if (!cancelled) setLoadingData(false);
       }
     };
 
     fetchRenstra();
+
+    return () => {
+      cancelled = true;
+    };
   }, [year]);
 
   const filteredData = useMemo(() => {
     return data.filter((item) => item.year === year);
   }, [data, year]);
+
+  // True selama daftar tahun atau data Renstra masih diambil dari server.
+  const isLoading = loadingYears || loadingData;
 
   /* =======================================================
      DETAIL
@@ -1111,8 +1299,7 @@ function PohonRenstra() {
                 ? {
                     ...intermediate,
                     sasaran: formValues.sasaran,
-                    indicator: formValues.indicator,
-                    target: formValues.target,
+                    indicators: formValues.indicatorRows,
                   }
                 : intermediate;
             }
@@ -1224,8 +1411,7 @@ function PohonRenstra() {
             : level === "INTERMEDIATE OUTCOME"
             ? {
                 sasaran: formValues.sasaran,
-                indicator: formValues.indicator,
-                target: formValues.target,
+                indicators: formValues.indicatorRows,
               }
             : {
                 program: formValues.program,
@@ -1285,7 +1471,7 @@ function PohonRenstra() {
           <button
             type="button"
             onClick={() => exportRenstraToExcel(filteredData, year)}
-            disabled={filteredData.length === 0}
+            disabled={isLoading || filteredData.length === 0}
             className="flex items-center gap-2 rounded-md border border-emerald-600 bg-white px-4 py-2 text-sm font-semibold text-emerald-700 shadow-sm transition hover:bg-emerald-50 disabled:cursor-not-allowed disabled:border-slate-300 disabled:text-slate-400 disabled:hover:bg-white"
           >
             <Download className="h-4 w-4" />
@@ -1322,7 +1508,7 @@ function PohonRenstra() {
         </div>
 
         {/* INFO */}
-        {!loadingData && isArchived ? (
+        {!isLoading && isArchived ? (
           <div className="mb-5 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3">
             <div className="flex items-start gap-3">
               <span className="material-symbols-outlined text-amber-600">archive</span>
@@ -1354,7 +1540,12 @@ function PohonRenstra() {
         )}
 
         {/* TABLE */}
-        <RenstraTable data={filteredData} archived={isArchived} loading={loadingData} onDetail={openDetail} />
+        <RenstraTable
+          data={filteredData}
+          archived={isArchived}
+          loading={isLoading}
+          onDetail={openDetail}
+        />
       </main>
 
       {/* DETAIL MODAL */}
