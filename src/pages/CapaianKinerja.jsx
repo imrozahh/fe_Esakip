@@ -164,6 +164,7 @@ export default function CapaianKinerja() {
     try {
       await api.post("/capaian", {
         intermediate_id: selectedCell.intermediate.id,
+        indikator_index: selectedCell.intermediate.indikator_index ?? 0,
         periode: selectedCell.periodeId,
         bulan: selectedCell.periodeId,
         tahun: Number(tahun),
@@ -511,108 +512,139 @@ export default function CapaianKinerja() {
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-200">
-                {filteredIntermediates.map((item, index) => {
-                  const targetNum = Number(item.target) || 0;
-                  const rataPersen = Number(item.rata_rata_persentase) || 0;
+                {(() => {
+                  // Compute rowSpan info for sasaran merging
+                  const items = filteredIntermediates;
+                  const sasaranSpans = [];
+                  let i = 0;
+                  while (i < items.length) {
+                    let span = 1;
+                    while (
+                      i + span < items.length &&
+                      items[i + span].id === items[i].id &&
+                      items[i + span].sasaran === items[i].sasaran
+                    ) {
+                      span++;
+                    }
+                    for (let j = 0; j < span; j++) {
+                      sasaranSpans.push(j === 0 ? span : 0);
+                    }
+                    i += span;
+                  }
 
-                  return (
-                    <tr
-                      key={item.id}
-                      className="hover:bg-blue-50/40 transition-colors group"
-                    >
-                      {/* No */}
-                      <td className="py-3 px-3 text-center text-slate-500 font-medium border-r border-slate-100">
-                        {index + 1}
-                      </td>
+                  return items.map((item, index) => {
+                    const targetNum = Number(item.target) || 0;
+                    const rataPersen = Number(item.rata_rata_persentase) || 0;
+                    const showSasaran = sasaranSpans[index] > 0;
+                    const rowSpan = sasaranSpans[index];
 
-                      {/* Sasaran */}
-                      <td className="py-3 px-4 font-semibold text-slate-900 border-r border-slate-100 leading-relaxed">
-                        <div className="flex items-start gap-1.5">
-                          <span className="material-symbols-outlined text-blue-900 text-base shrink-0 mt-0.5">
-                            alt_route
-                          </span>
-                          <span>{item.sasaran || item.title || "-"}</span>
-                        </div>
-                      </td>
-
-                      {/* Indikator */}
-                      <td className="py-3 px-4 text-slate-600 border-r border-slate-100 leading-relaxed">
-                        {item.indikator || "-"}
-                      </td>
-
-                      {/* Target */}
-                      <td className="py-3 px-3 text-center font-bold text-[#001e40] border-r border-slate-100">
-                        {targetNum > 0
-                          ? targetNum
-                          : item.target_satuan_raw || "-"}
-                      </td>
-
-                      {/* Satuan */}
-                      <td className="py-3 px-3 text-center text-slate-600 border-r border-slate-100">
-                        {item.satuan || "-"}
-                      </td>
-
-                      {/* 4 Periode Realisasi (Per 3 Bulan) */}
-                      {DAFTAR_PERIODE.map((p) => {
-                        const list =
-                          item.capaian_triwulan || item.capaian_bulanan || [];
-                        const cellData = list.find(
-                          (c) => (c.periode || c.bulan) === p.id,
-                        );
-                        const hasValue =
-                          cellData && cellData.realisasi !== null;
-                        const realisasiVal = hasValue
-                          ? Number(cellData.realisasi)
-                          : null;
-
-                        return (
+                    return (
+                      <tr
+                        key={`${item.id}-${item.indikator_index ?? index}`}
+                        className="hover:bg-blue-50/40 transition-colors group"
+                      >
+                        {/* No — only show on first row of sasaran group */}
+                        {showSasaran && (
                           <td
-                            key={p.id}
-                            onClick={() => handleOpenModal(item, p.id)}
-                            className="py-3 px-3 text-center border-r border-slate-100 cursor-pointer hover:bg-blue-50 transition-colors relative group/cell"
-                            title={`Klik untuk edit realisasi ${p.nama} (${p.singkatan})`}
+                            rowSpan={rowSpan}
+                            className="py-3 px-3 text-center text-slate-500 font-medium border-r border-slate-100 align-top"
                           >
-                            {hasValue ? (
-                              <div className="flex items-center justify-center h-8">
-                                <span className="font-semibold text-slate-800 text-xs px-3 py-1.5 rounded-lg bg-slate-100 group-hover/cell:bg-blue-100 group-hover/cell:text-blue-950 transition-colors inline-block min-w-[45px]">
-                                  {realisasiVal}
-                                </span>
-                              </div>
-                            ) : (
-                              <div className="flex items-center justify-center h-8 text-slate-300 group-hover/cell:text-blue-900">
-                                <span className="group-hover/cell:hidden text-sm">
-                                  -
-                                </span>
-                                <span className="hidden group-hover/cell:inline-flex items-center gap-1 text-[11px] font-bold text-blue-900 bg-blue-50 px-2 py-1 rounded-lg border border-blue-200 shadow-xs">
-                                  <span className="material-symbols-outlined text-[14px]">
-                                    add
-                                  </span>
-                                  Isi
-                                </span>
-                              </div>
-                            )}
+                            {items.slice(0, index).filter((_, si) => sasaranSpans[si] > 0).length + 1}
                           </td>
-                        );
-                      })}
+                        )}
 
-                      {/* Total Realisasi */}
-                      <td className="py-3 px-3 text-center font-bold text-slate-800 border-r border-slate-100 bg-slate-50/70">
-                        {item.total_realisasi || 0}
-                      </td>
+                        {/* Sasaran — merged */}
+                        {showSasaran && (
+                          <td
+                            rowSpan={rowSpan}
+                            className="py-3 px-4 font-semibold text-slate-900 border-r border-slate-100 leading-relaxed align-top"
+                          >
+                            <div className="flex items-start gap-1.5">
+                              <span className="material-symbols-outlined text-blue-900 text-base shrink-0 mt-0.5">
+                                alt_route
+                              </span>
+                              <span>{item.sasaran || "-"}</span>
+                            </div>
+                          </td>
+                        )}
 
-                      {/* Persentase Rata-rata */}
-                      <td className="py-3 px-3 text-center bg-slate-50/70">
-                        <span
-                          className={`inline-block px-2.5 py-1 rounded-full text-xs ${getBadgeStyle(
-                            rataPersen,
-                          )}`}
-                        >
-                          {rataPersen}%
-                        </span>
-                      </td>
-                    </tr>
-                  );
-                })}
+                        {/* Indikator */}
+                        <td className="py-3 px-4 text-slate-600 border-r border-slate-100 leading-relaxed">
+                          {item.indikator || "-"}
+                        </td>
+
+                        {/* Target */}
+                        <td className="py-3 px-3 text-center font-bold text-[#001e40] border-r border-slate-100">
+                          {targetNum > 0 ? targetNum : "-"}
+                        </td>
+
+                        {/* Satuan */}
+                        <td className="py-3 px-3 text-center text-slate-600 border-r border-slate-100">
+                          {item.satuan || "-"}
+                        </td>
+
+                        {/* 4 Periode Realisasi (Per 3 Bulan) */}
+                        {DAFTAR_PERIODE.map((p) => {
+                          const list =
+                            item.capaian_triwulan || item.capaian_bulanan || [];
+                          const cellData = list.find(
+                            (c) => (c.periode || c.bulan) === p.id,
+                          );
+                          const hasValue =
+                            cellData && cellData.realisasi !== null;
+                          const realisasiVal = hasValue
+                            ? Number(cellData.realisasi)
+                            : null;
+
+                          return (
+                            <td
+                              key={p.id}
+                              onClick={() => handleOpenModal(item, p.id)}
+                              className="py-3 px-3 text-center border-r border-slate-100 cursor-pointer hover:bg-blue-50 transition-colors relative group/cell"
+                              title={`Klik untuk edit realisasi ${p.nama} (${p.singkatan})`}
+                            >
+                              {hasValue ? (
+                                <div className="flex items-center justify-center h-8">
+                                  <span className="font-semibold text-slate-800 text-xs px-3 py-1.5 rounded-lg bg-slate-100 group-hover/cell:bg-blue-100 group-hover/cell:text-blue-950 transition-colors inline-block min-w-[45px]">
+                                    {realisasiVal}
+                                  </span>
+                                </div>
+                              ) : (
+                                <div className="flex items-center justify-center h-8 text-slate-300 group-hover/cell:text-blue-900">
+                                  <span className="group-hover/cell:hidden text-sm">
+                                    -
+                                  </span>
+                                  <span className="hidden group-hover/cell:inline-flex items-center gap-1 text-[11px] font-bold text-blue-900 bg-blue-50 px-2 py-1 rounded-lg border border-blue-200 shadow-xs">
+                                    <span className="material-symbols-outlined text-[14px]">
+                                      add
+                                    </span>
+                                    Isi
+                                  </span>
+                                </div>
+                              )}
+                            </td>
+                          );
+                        })}
+
+                        {/* Total Realisasi */}
+                        <td className="py-3 px-3 text-center font-bold text-slate-800 border-r border-slate-100 bg-slate-50/70">
+                          {item.total_realisasi || 0}
+                        </td>
+
+                        {/* Persentase Rata-rata */}
+                        <td className="py-3 px-3 text-center bg-slate-50/70">
+                          <span
+                            className={`inline-block px-2.5 py-1 rounded-full text-xs ${getBadgeStyle(
+                              rataPersen,
+                            )}`}
+                          >
+                            {rataPersen}%
+                          </span>
+                        </td>
+                      </tr>
+                    );
+                  });
+                })()}
               </tbody>
             </table>
           </div>
@@ -646,7 +678,7 @@ export default function CapaianKinerja() {
 
               return (
                 <div
-                  key={item.id}
+                  key={`prog-${item.id}-${item.indikator_index ?? index}`}
                   className="p-4 rounded-xl border border-slate-100 bg-slate-50/60 space-y-2.5"
                 >
                   <div className="flex items-start justify-between gap-3">
