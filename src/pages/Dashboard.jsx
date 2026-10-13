@@ -9,6 +9,9 @@ import { useEffect, useMemo, useRef, useState } from "react";
 const API_BASE_URL = "http://localhost:8000";
 const AUTO_REFRESH_INTERVAL_MS = 20000;
 
+// Diagram pohon tidak diperkecil lebih dari ini; di bawah itu jadi bisa digeser.
+const TREE_MIN_SCALE = 0.55;
+
 /* =========================================================
    HELPER: hitung milidetik sampai tengah malam berikutnya
 ========================================================= */
@@ -237,59 +240,53 @@ export default function Dashboard() {
   }, [activeYear]);
 
   /* =======================================================
-     CAPAIAN KINERJA PER INTERMEDIATE — satu bar per
-     Intermediate (Intermediate 1, 2, 3, dst), persentasenya
-     ambil langsung dari "rata_rata_persentase" tiap
-     Intermediate (field yang sama dengan kolom "% Capaian"
-     di tabel Capaian Kinerja). Ikut activeYear, auto-refresh
-     juga seperti bagian lain.
+     DIAGRAM MUAT PENUH — kalau pohon lebih lebar dari kartunya,
+     diagram diperkecil otomatis supaya kiri-kanannya kelihatan
+     semua. Kalau sudah mentok di skala minimum, sisanya bisa
+     digeser (scroll) tanpa ada bagian yang terpotong.
   ======================================================= */
 
-  const [intermediateCapaian, setIntermediateCapaian] = useState([]);
-  const [intermediateCapaianStatus, setIntermediateCapaianStatus] = useState("loading");
+  const treeViewportRef = useRef(null);
+  const treeContentRef = useRef(null);
+  const [treeFit, setTreeFit] = useState({ scale: 1, width: 0, height: 0 });
 
   useEffect(() => {
-    let cancelled = false;
+    const viewport = treeViewportRef.current;
+    const content = treeContentRef.current;
 
-    async function fetchIntermediateCapaian() {
-      try {
-        const token = localStorage.getItem("e_sakip_token");
+    if (!viewport || !content) return;
 
-        const response = await fetch(
-          `${API_BASE_URL}/api/capaian?tahun=${activeYear}`,
-          {
-            headers: token ? { Authorization: `Bearer ${token}` } : {},
-          }
-        );
+    function measure() {
+      const naturalWidth = content.offsetWidth;
+      const naturalHeight = content.offsetHeight;
+      const available = viewport.clientWidth;
 
-        if (!response.ok) {
-          throw new Error(`Request gagal dengan status ${response.status}`);
-        }
+      const scale =
+        naturalWidth > available
+          ? Math.max(available / naturalWidth, TREE_MIN_SCALE)
+          : 1;
 
-        const json = await response.json();
-
-        if (!cancelled) {
-          setIntermediateCapaian(json.data?.intermediates ?? []);
-          setIntermediateCapaianStatus("success");
-        }
-      } catch (error) {
-        if (!cancelled) {
-          console.error("Gagal mengambil capaian per intermediate:", error);
-          setIntermediateCapaianStatus("error");
-        }
-      }
+      setTreeFit((previous) =>
+        previous.scale === scale &&
+        previous.width === naturalWidth * scale &&
+        previous.height === naturalHeight * scale
+          ? previous
+          : {
+              scale,
+              width: naturalWidth * scale,
+              height: naturalHeight * scale,
+            }
+      );
     }
 
-    setIntermediateCapaianStatus("loading");
-    fetchIntermediateCapaian();
+    measure();
 
-    const intervalId = setInterval(fetchIntermediateCapaian, AUTO_REFRESH_INTERVAL_MS);
+    const observer = new ResizeObserver(measure);
+    observer.observe(viewport);
+    observer.observe(content);
 
-    return () => {
-      cancelled = true;
-      clearInterval(intervalId);
-    };
-  }, [activeYear]);
+    return () => observer.disconnect();
+  }, [tree, treeStatus]);
 
   /* =======================================================
      STAT CARDS — Ultimate, Intermediate, Immediate, Output
@@ -394,10 +391,10 @@ export default function Dashboard() {
           </div>
         </section>
 
-        {/* ================= DUA DIAGRAM SEJAJAR ================= */}
-        <section className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        {/* ================= DIAGRAM POHON KINERJA + SISI KANAN ================= */}
+        <section className="grid grid-cols-1 gap-6 lg:grid-cols-[minmax(0,1fr)_340px]">
           {/* ================= DIAGRAM POHON KINERJA ================= */}
-          <div className="bg-white border border-[#E2E8F0] rounded-xl shadow-sm">
+          <div className="bg-white border border-[#E2E8F0] rounded-xl shadow-sm min-w-0">
             <div className="flex items-center justify-between p-4 border-b border-[#E2E8F0]">
               <div>
                 <h2 className="text-lg md:text-xl font-semibold text-[#0B1C30]">
@@ -409,7 +406,7 @@ export default function Dashboard() {
               </div>
             </div>
 
-            <div className="p-5 md:p-8 overflow-x-auto">
+            <div className="p-5 md:p-6">
               {treeStatus === "loading" && (
                 <p className="text-sm text-[#737780] text-center py-10">
                   Memuat diagram...
@@ -429,204 +426,92 @@ export default function Dashboard() {
               )}
 
               {treeStatus === "success" && tree && (
-                <div className="flex flex-col items-center min-w-max px-4">
-                  {/* ROOT: Ultimate Outcome */}
-                  <div className="rounded-lg border-2 border-[#001E40] bg-[#001E40] px-4 py-2.5 text-center max-w-[240px] shadow-sm">
-                    <p className="text-[9px] uppercase tracking-wide text-white/70">
-                      Ultimate Outcome
-                    </p>
-                    <p className="text-sm font-semibold text-white line-clamp-2">
-                      {tree.title}
-                    </p>
-                  </div>
-
-                  {tree.branches && tree.branches.length > 0 && (
-                    <>
-                      {/* garis turun dari root */}
-                      <div className="w-px h-5 bg-[#C3C6D1]" />
-
-                      <div className="relative flex justify-center gap-5 flex-wrap">
-                        {/* garis horizontal penghubung, cuma kalau cabangnya lebih dari 1 */}
-                        {tree.branches.length > 1 && (
-                          <div className="absolute left-6 right-6 top-0 h-px bg-[#C3C6D1]" />
-                        )}
-
-                        {tree.branches.map((intermediate) => {
-                          const immediateChildren = intermediate.children ?? [];
-                          const totalImmediate = immediateChildren.length;
-                          const totalOutput = immediateChildren.reduce(
-                            (sum, immediate) =>
-                              sum + (immediate.children?.length ?? 0),
-                            0
-                          );
-
-                          return (
-                            <div
-                              key={intermediate.id}
-                              className="flex flex-col items-center pt-5"
-                            >
-                              <div className="w-px h-5 bg-[#C3C6D1] -mt-5 mb-0" />
-
-                              <div className="rounded-lg border border-[#173BAB] bg-[#DDE1FF] px-3 py-2 text-center w-[160px]">
-                                <p className="text-[9px] uppercase tracking-wide text-[#173BAB]">
-                                  Intermediate
-                                </p>
-                                <p className="text-xs font-medium text-[#0B1C30] line-clamp-2">
-                                  {intermediate.title}
-                                </p>
-                                <p className="text-[10px] text-[#43474F] mt-1">
-                                  {totalImmediate} Immediate · {totalOutput} Output
-                                </p>
-                              </div>
-                            </div>
-                          );
-                        })}
+                <div ref={treeViewportRef} className="w-full overflow-x-auto">
+                  {/* Kotak seukuran diagram yang sudah diskalakan: di tengah kalau
+                      muat, rata kiri + bisa digeser kalau masih lebih lebar. */}
+                  <div
+                    className="mx-auto"
+                    style={{
+                      width: treeFit.width || undefined,
+                      height: treeFit.height || undefined,
+                    }}
+                  >
+                    <div
+                      ref={treeContentRef}
+                      className="flex w-max flex-col items-center"
+                      style={{
+                        transform: `scale(${treeFit.scale})`,
+                        transformOrigin: "top left",
+                      }}
+                    >
+                      {/* ROOT: Ultimate Outcome */}
+                      <div className="rounded-lg border-2 border-[#001E40] bg-[#001E40] px-4 py-2.5 text-center max-w-[240px] shadow-sm">
+                        <p className="text-[9px] uppercase tracking-wide text-white/70">
+                          Ultimate Outcome
+                        </p>
+                        <p className="text-sm font-semibold text-white line-clamp-2">
+                          {tree.title}
+                        </p>
                       </div>
-                    </>
-                  )}
+
+                      {tree.branches && tree.branches.length > 0 && (
+                        <>
+                          {/* garis turun dari root */}
+                          <div className="w-px h-5 bg-[#C3C6D1]" />
+
+                          <div className="relative flex justify-center gap-5">
+                            {/* garis horizontal: dari tengah kartu pertama sampai tengah kartu terakhir */}
+                            {tree.branches.length > 1 && (
+                              <div className="absolute left-[80px] right-[80px] top-0 h-px bg-[#C3C6D1]" />
+                            )}
+
+                            {tree.branches.map((intermediate) => {
+                              const immediateChildren = intermediate.children ?? [];
+                              const totalImmediate = immediateChildren.length;
+                              const totalOutput = immediateChildren.reduce(
+                                (sum, immediate) =>
+                                  sum + (immediate.children?.length ?? 0),
+                                0
+                              );
+
+                              return (
+                                <div
+                                  key={intermediate.id}
+                                  className="flex flex-col items-center pt-5"
+                                >
+                                  <div className="w-px h-5 bg-[#C3C6D1] -mt-5 mb-0" />
+
+                                  <div className="rounded-lg border border-[#173BAB] bg-[#DDE1FF] px-3 py-2 text-center w-[160px]">
+                                    <p className="text-[9px] uppercase tracking-wide text-[#173BAB]">
+                                      Intermediate
+                                    </p>
+                                    <p className="text-xs font-medium text-[#0B1C30] line-clamp-2">
+                                      {intermediate.title}
+                                    </p>
+                                    <p className="text-[10px] text-[#43474F] mt-1">
+                                      {totalImmediate} Immediate · {totalOutput} Output
+                                    </p>
+                                  </div>
+                                </div>
+                              );
+                            })}
+                          </div>
+                        </>
+                      )}
+                    </div>
+                  </div>
                 </div>
               )}
             </div>
           </div>
 
-          {/* ================= CAPAIAN KINERJA PER INTERMEDIATE ================= */}
-          <div className="bg-white border border-[#E2E8F0] rounded-xl shadow-sm">
-            <div className="flex items-center justify-between p-4 border-b border-[#E2E8F0]">
-              <div>
-                <h2 className="text-lg md:text-xl font-semibold text-[#0B1C30]">
-                  Capaian Kinerja per Sasaran (Intermediate)
-                </h2>
-                <p className="text-xs text-[#737780] mt-0.5">
-                  Persentase capaian tiap Intermediate, tahun {activeYear}
-                </p>
-              </div>
-            </div>
-
-            <div className="p-5 md:p-6">
-              {intermediateCapaianStatus === "loading" && (
-                <p className="text-sm text-[#737780] text-center py-10">
-                  Memuat data capaian...
-                </p>
-              )}
-
-              {intermediateCapaianStatus === "error" && (
-                <p className="text-sm text-[#93000A] text-center py-10">
-                  Gagal memuat data capaian per Intermediate.
-                </p>
-              )}
-
-              {intermediateCapaianStatus === "success" && intermediateCapaian.length === 0 && (
-                <p className="text-sm text-[#737780] text-center py-10">
-                  Belum ada data Intermediate untuk tahun {activeYear}.
-                </p>
-              )}
-
-              {intermediateCapaianStatus === "success" && intermediateCapaian.length > 0 && (
-                <>
-                  <div className="relative h-[220px] pl-8">
-                    {/* Gridline & label sumbu Y (0/25/50/75/100/125/150%) */}
-                    <div className="absolute inset-y-0 left-8 right-0">
-                      {[150, 125, 100, 75, 50, 25, 0].map((mark) => (
-                        <div
-                          key={mark}
-                          className="absolute left-0 right-0 flex items-center"
-                          style={{ bottom: `${(mark / 150) * 100}%` }}
-                        >
-                          <span className="absolute -left-8 -translate-y-1/2 text-[9px] text-[#A3A9B4] w-6 text-right">
-                            {mark}
-                          </span>
-                          <div
-                            className={`w-full border-t ${
-                              mark === 100
-                                ? "border-dashed border-[#94A3B8]"
-                                : "border-[#F1F5F9]"
-                            }`}
-                          />
-                        </div>
-                      ))}
-                    </div>
-
-                    {/* Bar per Intermediate */}
-                    <div className="relative h-full flex items-end justify-around gap-3 md:gap-6 px-2 overflow-x-auto">
-                      {intermediateCapaian.map((item, index) => {
-                        const value = item.rata_rata_persentase ?? 0;
-
-                        // Traffic-light: hijau (tercapai) / kuning (mendekati) / merah (kurang)
-                        const barColor =
-                          value >= 100
-                            ? "bg-emerald-500"
-                            : value >= 75
-                            ? "bg-amber-400"
-                            : "bg-red-400";
-
-                        const heightPercent = Math.max(
-                          Math.min((value / 150) * 100, 100),
-                          2
-                        );
-
-                        return (
-                          <div
-                            key={item.id}
-                            className="h-full flex flex-col items-center justify-end gap-1.5 flex-1 min-w-[56px] max-w-[80px]"
-                          >
-                            <span className="text-xs font-bold text-[#0B1C30]">
-                              {value}%
-                            </span>
-
-                            <div
-                              className={`w-full rounded-t-md transition-all ${barColor}`}
-                              style={{ height: `${heightPercent}%` }}
-                              title={`${item.sasaran}: ${value}%`}
-                            />
-                          </div>
-                        );
-                      })}
-                    </div>
-                  </div>
-
-                  {/* Label "Intermediate 1, 2, 3, dst" di bawah chart */}
-                  <div className="flex justify-around gap-3 md:gap-6 px-2 mt-2 pl-8 overflow-x-auto">
-                    {intermediateCapaian.map((item, index) => (
-                      <div
-                        key={item.id}
-                        className="text-center flex-1 min-w-[56px] max-w-[80px]"
-                        title={item.sasaran}
-                      >
-                        <p className="text-xs font-semibold text-[#43474F]">
-                          Intermediate {index + 1}
-                        </p>
-                      </div>
-                    ))}
-                  </div>
-
-                  {/* Legenda warna */}
-                  <div className="flex flex-wrap items-center justify-center gap-x-4 gap-y-1.5 mt-5 pt-4 border-t border-[#F1F5F9]">
-                    <div className="flex items-center gap-1.5">
-                      <span className="w-2.5 h-2.5 rounded-sm bg-emerald-500" />
-                      <span className="text-[10px] text-[#43474F]">Tercapai (&ge;100%)</span>
-                    </div>
-                    <div className="flex items-center gap-1.5">
-                      <span className="w-2.5 h-2.5 rounded-sm bg-amber-400" />
-                      <span className="text-[10px] text-[#43474F]">Mendekati (75-99%)</span>
-                    </div>
-                    <div className="flex items-center gap-1.5">
-                      <span className="w-2.5 h-2.5 rounded-sm bg-red-400" />
-                      <span className="text-[10px] text-[#43474F]">Kurang (&lt;75%)</span>
-                    </div>
-                  </div>
-                </>
-              )}
-            </div>
-          </div>
-        </section>
-
-        {/* ================= AKSI CEPAT + AKTIVITAS TERBARU ================= */}
-        <section className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-          {/* Aksi Cepat */}
-          <div className="bg-white border border-[#E2E8F0] rounded-xl p-4 shadow-sm">
-            <h2 className="text-lg md:text-xl font-semibold text-[#0B1C30] mb-4">
-              Aksi Cepat
-            </h2>
+          {/* ================= KOLOM KANAN: AKSI CEPAT + AKTIVITAS TERBARU ================= */}
+          <div className="flex min-w-0 flex-col gap-6">
+            {/* Aksi Cepat */}
+            <div className="bg-white border border-[#E2E8F0] rounded-xl p-4 shadow-sm">
+              <h2 className="text-lg md:text-xl font-semibold text-[#0B1C30] mb-4">
+                Aksi Cepat
+              </h2>
 
               <div className="grid grid-cols-2 gap-2">
                 {/* NOTE: sesuaikan href di bawah ini dengan path routing
@@ -658,7 +543,7 @@ export default function Dashboard() {
             </div>
 
             {/* Aktivitas Terbaru */}
-            <div className="lg:col-span-2 bg-white border border-[#E2E8F0] rounded-xl flex flex-col shadow-sm">
+            <div className="bg-white border border-[#E2E8F0] rounded-xl flex flex-col shadow-sm">
               <div className="p-4 border-b border-[#E2E8F0]">
                 <h2 className="text-lg md:text-xl font-semibold text-[#0B1C30]">
                   Aktivitas Terbaru
@@ -705,13 +590,13 @@ export default function Dashboard() {
                           </span>
                         </div>
 
-                        <div>
+                        <div className="min-w-0">
                           <p className="text-sm text-[#0B1C30] leading-5">
                             <span className="text-xs text-[#737780]">
                               {meta.label}
                             </span>
                             <br />
-                            <span className="font-medium">
+                            <span className="font-medium break-words">
                               {activity.title || "(tanpa judul)"}
                             </span>
                           </p>
@@ -725,6 +610,7 @@ export default function Dashboard() {
                   })}
               </div>
             </div>
+          </div>
         </section>
       </main>
 

@@ -50,7 +50,7 @@ function Sidebar() {
       icon: "assignment_turned_in",
       submenu: [
         {
-          name: "Capaian Kinerja",
+          name: "Capaian Kinerja Utama",
           icon: "trending_up",
           path: "/capaian-kerja",
         },

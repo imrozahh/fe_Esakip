@@ -8,6 +8,28 @@ import { Download, Pencil } from "lucide-react";
 
 const API_BASE_URL = "http://127.0.0.1:8000/api";
 
+/* =========================================================
+   FILTER TAHUN
+   Daftar tahun tetap (tidak bergantung ada-tidaknya data), supaya data
+   tahun-tahun berikutnya (2027, 2028, ...) otomatis bisa dibuka dan
+   diedit begitu sudah ada. Ganti dua angka ini kalau periodenya berubah.
+========================================================= */
+
+const YEAR_RANGE_START = 2026;
+const YEAR_RANGE_END = 2030;
+
+const YEAR_OPTIONS = Array.from(
+  { length: YEAR_RANGE_END - YEAR_RANGE_START + 1 },
+  (_, index) => YEAR_RANGE_START + index
+);
+
+// Yang tampil pertama kali = tahun berjalan. Kalau tahun berjalan di luar
+// rentang (misalnya sudah 2031), pakai ujung rentang yang terdekat.
+function getDefaultYear() {
+  const currentYear = new Date().getFullYear();
+  return String(Math.min(Math.max(currentYear, YEAR_RANGE_START), YEAR_RANGE_END));
+}
+
 // Slug URL yang dipakai backend Laravel: /api/renstra/nodes/{slug}/{id}
 const LEVEL_TO_SLUG = {
   "ULTIMATE OUTCOME": "ultimate",
@@ -1129,49 +1151,15 @@ function RenstraTable({ data, archived, loading, onDetail }) {
 
 function PohonRenstra() {
   const [data, setData] = useState([]);
-  const [year, setYear] = useState("2026");
+  const [year, setYear] = useState(getDefaultYear);
   const [detail, setDetail] = useState(null);
   const [editData, setEditData] = useState(null);
   const [saving, setSaving] = useState(false);
   const [isArchived, setIsArchived] = useState(false);
 
-  // Available years state
-  const [availableYears, setAvailableYears] = useState([]);
   // Mulai dari true: sebelum request pertama selesai, tabel harus menampilkan
   // "Sedang mencari data...", bukan langsung "Belum ada data".
-  const [loadingYears, setLoadingYears] = useState(true);
   const [loadingData, setLoadingData] = useState(true);
-
-  // Fetch available years on component load
-  useEffect(() => {
-    const fetchYears = async () => {
-      setLoadingYears(true);
-      try {
-        const response = await fetch(`${API_BASE_URL}/renstra/years`, {
-          method: "GET",
-          headers: getAuthHeaders(),
-        });
-
-        const data = await response.json();
-
-        if (response.ok) {
-          setAvailableYears(data.data || []);
-          // Set default year to first available year if available
-          if (data.data && data.data.length > 0) {
-            setYear(String(data.data[0]));
-          }
-        } else {
-          console.error("Gagal mengambil daftar tahun:", data.message);
-        }
-      } catch (err) {
-        console.error("Failed to fetch years:", err);
-      } finally {
-        setLoadingYears(false);
-      }
-    };
-
-    fetchYears();
-  }, []);
 
   useEffect(() => {
     // Belum ada tahun yang dipilih: tidak ada yang dicari.
@@ -1255,8 +1243,8 @@ function PohonRenstra() {
     return data.filter((item) => item.year === year);
   }, [data, year]);
 
-  // True selama daftar tahun atau data Renstra masih diambil dari server.
-  const isLoading = loadingYears || loadingData;
+  // True selama data Renstra untuk tahun terpilih masih diambil dari server.
+  const isLoading = loadingData;
 
   /* =======================================================
      DETAIL
@@ -1493,21 +1481,13 @@ function PohonRenstra() {
             <select
               value={year}
               onChange={(event) => setYear(event.target.value)}
-              disabled={loadingYears}
-              className="w-full rounded-md border border-slate-300 bg-white p-2.5 text-sm text-slate-700 outline-none transition focus:border-blue-950 focus:ring-2 focus:ring-blue-950/20 disabled:bg-slate-100 disabled:cursor-not-allowed"
+              className="w-full rounded-md border border-slate-300 bg-white p-2.5 text-sm text-slate-700 outline-none transition focus:border-blue-950 focus:ring-2 focus:ring-blue-950/20"
             >
-              <option value="">Pilih Tahun</option>
-              {loadingYears ? (
-                <option disabled>Memuat tahun...</option>
-              ) : availableYears.length > 0 ? (
-                availableYears.map((yr) => (
-                  <option key={yr} value={String(yr)}>
-                    {yr}
-                  </option>
-                ))
-              ) : (
-                <option disabled>Tidak ada data tahun</option>
-              )}
+              {YEAR_OPTIONS.map((yr) => (
+                <option key={yr} value={String(yr)}>
+                  {yr}
+                </option>
+              ))}
             </select>
           </div>
         </div>
