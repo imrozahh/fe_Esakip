@@ -169,7 +169,7 @@ const COLOR_ORANGE = "FFFFC000";
 const COLOR_GRAY = "FFD8D8D8";
 const COLOR_YELLOW = "FFFFCC29";
 
-// Warna header per kolom (index 0 = kolom A ... index 23 = kolom X).
+// Warna header per kolom (index 0 = kolom A ... index 22 = kolom W).
 const HEADER_COLORS = [
   COLOR_RED, COLOR_RED, COLOR_RED, COLOR_RED, // Ultimate Outcome, Tujuan, Indikator, Target
   COLOR_BLUE, COLOR_RED, COLOR_RED, COLOR_RED, // Intermediate Outcome, Sasaran, Indikator, Target
@@ -221,18 +221,33 @@ function dataCellStyle(bgColor) {
   };
 }
 
-// Jumlah kolom dari "Immediate Outcome" sampai "Target/ Satuan" Sub Kegiatan.
-const EXPORT_RIGHT_COLUMN_COUNT = 16;
-
 /**
- * Susun baris export. Nilai induk (Ultimate, Intermediate) DIULANG di
- * setiap baris turunannya — tidak dikosongkan, tanpa merge cell.
- *
- * Kalau 1 Intermediate punya lebih dari 1 indikator, indikator ke-2 dst.
- * ditumpuk KE BAWAH di kolom Indikator / Target yang sama, masih di blok
- * Intermediate yang sama. Indikator dan Output dibagi rata ke semua baris
- * blok itu, jadi tidak ada baris/sel yang kosong.
+ * Susun baris export. Nilai induk (Ultimate, Intermediate, Immediate,
+ * Output) DIULANG di setiap baris turunannya — tidak dikosongkan —
+ * persis seperti format file referensi (tanpa merge cell).
  */
+// Placeholder untuk data kosong dan untuk baris tambahan (lihat buildExportRows).
+const EMPTY_IMMEDIATE = {
+  id: "empty",
+  title: "",
+  program: "",
+  nomenklaturSipd: "",
+  indicator: "",
+  target: "",
+  outputs: [],
+};
+
+const EMPTY_OUTPUT = {
+  id: "empty",
+  title: "",
+  kegiatan: "",
+  nomenklaturSipd: "",
+  indicator: "",
+  target: "",
+  outputInput: "",
+  subKegiatan: [],
+};
+
 function buildExportRows(renstraList) {
   const rows = [];
 
@@ -244,57 +259,37 @@ function buildExportRows(renstraList) {
       : [{ id: "empty", title: "", sasaran: "", indicators: [], immediates: [] }];
 
     intermediates.forEach((intermediate) => {
+      // 1) Satu entri per Output (Immediate induknya ikut dibawa).
+      const leaves = [];
       const immediates = intermediate.immediates.length
         ? intermediate.immediates
-        : [{ id: "empty", title: "", program: "", nomenklaturSipd: "", indicator: "", target: "", outputs: [] }];
-
-      // 1) Kumpulkan bagian kanan (Immediate -> Sub Kegiatan), 1 item per Output.
-      const rightParts = [];
+        : [EMPTY_IMMEDIATE];
 
       immediates.forEach((immediate) => {
-        const outputs = immediate.outputs.length
-          ? immediate.outputs
-          : [{ id: "empty", title: "", kegiatan: "", nomenklaturSipd: "", indicator: "", target: "", outputInput: "", subKegiatan: [] }];
-
-        outputs.forEach((output) => {
-          const sub = output.subKegiatan?.[0] || {};
-
-          rightParts.push([
-            immediate.title || "",
-            immediate.program || "",
-            immediate.nomenklaturSipd || "",
-            immediate.indicator || "",
-            immediate.target || "",
-            output.title || "",
-            output.kegiatan || "",
-            output.nomenklaturSipd || "",
-            output.indicator || "",
-            output.target || "",
-            output.outputInput || "",
-            Number(output.anggaran) || 0,
-            sub.title || "",
-            sub.nomenklaturSipd || "",
-            sub.indicator || "",
-            sub.target || "",
-          ]);
-        });
+        const outputs = immediate.outputs.length ? immediate.outputs : [EMPTY_OUTPUT];
+        outputs.forEach((output) => leaves.push({ immediate, output }));
       });
 
-      // 2) Bagi rata: indikator & Output dibagi ke seluruh baris Intermediate
-      //    ini, jadi tidak ada baris yang kosong.
-      //    Contoh 4 Output + 2 indikator -> baris 1-2 indikator 1, baris 3-4 indikator 2.
-      //    Contoh 1 Output + 2 indikator -> 2 baris, Output-nya diulang.
+      // 2) Tiap indikator harus punya baris sendiri, jadi jumlah baris minimal
+      //    sebanyak indikator. Kalau Output-nya kurang, ditambah baris dengan
+      //    kolom Output kosong (bukan menggandakan Output, supaya anggaran
+      //    tidak terhitung dua kali). Immediate-nya tetap diulang.
       const indicators = intermediate.indicators || [];
-      const totalRows = Math.max(rightParts.length, indicators.length, 1);
+      const totalRows = Math.max(leaves.length, indicators.length, 1);
 
-      for (let i = 0; i < totalRows; i++) {
+      while (leaves.length < totalRows) {
+        const last = leaves[leaves.length - 1];
+        leaves.push({ immediate: last.immediate, output: EMPTY_OUTPUT });
+      }
+
+      // 3) Baris dibagi berurutan ke tiap indikator: indikator 1 di blok baris
+      //    paling atas, indikator 2 di blok setelahnya, dan seterusnya.
+      //    Tidak pernah digabung dalam satu sel.
+      leaves.forEach(({ immediate, output }, rowIndex) => {
         const indicatorRow = indicators.length
-          ? indicators[Math.floor((i * indicators.length) / totalRows)]
+          ? indicators[Math.floor((rowIndex * indicators.length) / totalRows)]
           : null;
-
-        const rightPart = rightParts.length
-          ? rightParts[Math.floor((i * rightParts.length) / totalRows)]
-          : Array(EXPORT_RIGHT_COLUMN_COUNT).fill("");
+        const sub = output.subKegiatan?.[0] || {};
 
         rows.push([
           ultimate.title || "",
@@ -304,12 +299,25 @@ function buildExportRows(renstraList) {
           intermediate.title || "",
           intermediate.sasaran || "",
           indicatorRow?.indicator || "",
-          indicatorRow
-            ? formatTargetSatuan(indicatorRow.target, indicatorRow.satuan)
-            : "",
-          ...rightPart,
+          indicatorRow ? formatTargetSatuan(indicatorRow.target, indicatorRow.satuan) : "",
+          immediate.title || "",
+          immediate.program || "",
+          immediate.nomenklaturSipd || "",
+          immediate.indicator || "",
+          immediate.target || "",
+          output.title || "",
+          output.kegiatan || "",
+          output.nomenklaturSipd || "",
+          output.indicator || "",
+          output.target || "",
+          output.outputInput || "",
+          output.anggaran === undefined ? "" : Number(output.anggaran) || 0,
+          sub.title || "",
+          sub.nomenklaturSipd || "",
+          sub.indicator || "",
+          sub.target || "",
         ]);
-      }
+      });
     });
   });
 
@@ -338,15 +346,12 @@ function exportRenstraToExcel(renstraList, year) {
           ? headerCellStyle(HEADER_COLORS[colIndex])
           : dataCellStyle(DATA_NAME_COLUMN_COLORS[colIndex]);
 
-      // Kolom Anggaran di baris data: format angka ribuan
-      // (hanya kalau isinya angka, baris tambahan yang kosong dibiarkan).
-      if (
-        rowIndex > 0 &&
-        colIndex === ANGGARAN_COLUMN_INDEX &&
-        typeof worksheet[cellRef].v === "number"
-      ) {
+      // Kolom Anggaran di baris data: format angka ribuan.
+      if (rowIndex > 0 && colIndex === ANGGARAN_COLUMN_INDEX) {
         worksheet[cellRef].s.numFmt = "#,##0";
-        worksheet[cellRef].t = "n";
+        if (typeof worksheet[cellRef].v === "number") {
+          worksheet[cellRef].t = "n";
+        }
       }
     }
   }
@@ -970,7 +975,7 @@ function RenstraTable({ data, archived, loading, onDetail }) {
                   progress_activity
                 </span>
                 <p className="text-sm font-semibold text-slate-600">
-                  Sedang mengambil data...
+                  Sedang mencari data...
                 </p>
               </td>
             </tr>
