@@ -25,8 +25,8 @@ function round(num, decimals = 2) {
 
 export default function RealisasiAnggaran() {
   const currentYear = new Date().getFullYear();
-  const [tahun, setTahun] = useState(currentYear);
-  const [availableYears, setAvailableYears] = useState([currentYear]);
+  const [tahun, setTahun] = useState(null);
+  const [availableYears, setAvailableYears] = useState([]);
   const [data, setData] = useState({
     unit_kerja: "",
     summary: {
@@ -57,7 +57,7 @@ export default function RealisasiAnggaran() {
     }, 3500);
   };
 
-  // Fetch Available Years
+  // Fetch Available Years & pilih tahun aktif dari Pohon Kinerja
   useEffect(() => {
     const fetchYears = async () => {
       try {
@@ -66,14 +66,16 @@ export default function RealisasiAnggaran() {
           const years = resp.data.data.map(Number);
           if (years.length > 0) {
             setAvailableYears(years);
-            if (!years.includes(Number(tahun))) {
-              setTahun(years[0]);
-            }
+            const activeYear = Number(resp.data.active_year) || years[0];
+            setTahun(activeYear);
+            return;
           }
         }
       } catch (err) {
         console.warn("Gagal mengambil daftar tahun, memakai default", err);
       }
+      setAvailableYears([currentYear]);
+      setTahun(currentYear);
     };
 
     fetchYears();
@@ -81,6 +83,7 @@ export default function RealisasiAnggaran() {
 
   // Fetch Realisasi Anggaran Data
   const fetchData = async () => {
+    if (!tahun) return;
     setLoading(true);
     setError(null);
     try {
@@ -109,7 +112,9 @@ export default function RealisasiAnggaran() {
   };
 
   useEffect(() => {
-    fetchData();
+    if (tahun) {
+      fetchData();
+    }
   }, [tahun]);
 
   // Summary Metrics
@@ -307,7 +312,7 @@ export default function RealisasiAnggaran() {
             <span className="material-symbols-outlined text-slate-500 text-lg">calendar_today</span>
             <span className="text-xs font-semibold text-slate-500 uppercase">Tahun:</span>
             <select
-              value={tahun}
+              value={tahun ?? ""}
               onChange={(e) => setTahun(Number(e.target.value))}
               className="bg-transparent text-sm font-bold text-[#001e40] focus:outline-none cursor-pointer"
             >

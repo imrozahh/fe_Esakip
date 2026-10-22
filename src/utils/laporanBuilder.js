@@ -839,18 +839,23 @@ const slug = (s) =>
     .replace(/(^-|-$)/g, "");
 
 export function exportReportExcel(report, meta) {
+  if (report.kategori === "renstra") {
+    exportRenstraExcel(report.data.rows, meta.tahun);
+    return;
+  }
   const wb = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb, sheetFromReport(report, meta), safeSheetName(report.sheetName || report.nama, new Set()));
   XLSX.writeFile(wb, `${slug(report.nama)}-${meta.tahun}.xlsx`);
 }
 
 export function exportAllExcel(reports, meta) {
-  const wb = XLSX.utils.book_new();
-  const used = new Set();
-  reports.forEach((report) => {
-    XLSX.utils.book_append_sheet(wb, sheetFromReport(report, meta), safeSheetName(report.sheetName || report.nama, used));
+  const targets = reports.filter((r) => r.data.total > 0);
+  const list = targets.length > 0 ? targets : reports;
+  list.forEach((report, idx) => {
+    setTimeout(() => {
+      exportReportExcel(report, meta);
+    }, idx * 250);
   });
-  XLSX.writeFile(wb, `laporan-e-sakip-${meta.tahun}.xlsx`);
 }
 
 /* =========================================================
@@ -866,35 +871,62 @@ const esc = (s) =>
 
 /* =========================================================
    CETAK POHON KINERJA — FORMAT DIAGRAM POHON (TREE)
-   Port langsung dari printTree / printNode di PohonKinerja.jsx.
-   Struktur data: ultimates[].intermediates[].immediates[].outputs[]
-   (dari endpoint /renstra).
+   Identik dengan tampilan Export PDF di halaman Pohon Kinerja
+   (#performance-tree + TreeNode + TreeConnectors SVG + zoom 0.7).
 ========================================================= */
 
-function printNodeHtml(level, node) {
-  const colors = {
-    ULTIMATE: ["#ef5b5b", "#ef5b5b"],
-    INTERMEDIATE: ["#2563eb", "#2563eb"],
-    IMMEDIATE: ["#059669", "#059669"],
-    OUTPUT: ["#f59e0b", "#f59e0b"],
-  }[level] || ["#2563eb", "#2563eb"];
+const PK_PALETTE = {
+  ULTIMATE:     { border: "#f87171", head: "#ef4444", label: "#ef4444" },
+  INTERMEDIATE: { border: "#60a5fa", head: "#2563eb", label: "#2563eb" },
+  IMMEDIATE:    { border: "#34d399", head: "#059669", label: "#059669" },
+  OUTPUT:       { border: "#fbbf24", head: "#f59e0b", label: "#d97706" },
+};
 
-  const bidangBadge = level === "INTERMEDIATE" && node.bidang
-    ? `<div style="padding:4px;background:#e0edff;color:#1e40af;font-size:9px;font-weight:bold;text-transform:capitalize">Bidang ${esc(BIDANG_LABEL[node.bidang] || node.bidang)}</div>`
+function renderPkTreeNode(level, node, nodeId) {
+  const colors = PK_PALETTE[level] || PK_PALETTE.INTERMEDIATE;
+  const title =
+    level === "INTERMEDIATE"
+      ? node.sasaran || node.title || "-"
+      : node.title || "-";
+
+  const bidangLabel =
+    level === "INTERMEDIATE" && node.bidang
+      ? `Bidang ${BIDANG_LABEL[node.bidang] || node.bidang}`
+      : null;
+
+  const bidangHtml = bidangLabel
+    ? `<span class="pk-bidang">${esc(bidangLabel)}</span>`
     : "";
 
-  let indicatorHtml;
-  if (level === "INTERMEDIATE" && Array.isArray(node.indicators) && node.indicators.length > 1) {
-    indicatorHtml = `<ul style="margin:0;padding-left:14px;text-align:left">${node.indicators.map((r) => `<li>${esc(r.indicator || "")}</li>`).join("")}</ul>`;
-  } else if (level === "INTERMEDIATE" && Array.isArray(node.indicators) && node.indicators.length === 1) {
-    indicatorHtml = esc(node.indicators[0].indicator || "Belum ada indikator");
-  } else {
-    indicatorHtml = esc(node.indicator || node.title || "Belum ada indikator");
+  let indicatorList = [];
+  if (level === "INTERMEDIATE" && Array.isArray(node.indicators)) {
+    indicatorList = node.indicators
+      .map((r) => String(typeof r === "object" ? r?.indicator ?? "" : r ?? "").trim())
+      .filter(Boolean);
   }
 
-  const title = level === "INTERMEDIATE" ? (node.title || node.sasaran || "-") : (node.title || "-");
+  let indicatorHtml;
+  if (level === "INTERMEDIATE" && indicatorList.length > 1) {
+    indicatorHtml = `<div class="pk-ind-list">${indicatorList
+      .map(
+        (ind, idx) =>
+          `<div class="pk-ind-row"><span class="pk-ind-num">${idx + 1}.</span><span class="pk-ind-txt">${esc(ind)}</span></div>`,
+      )
+      .join("")}</div>`;
+  } else {
+    const singleInd =
+      level === "INTERMEDIATE"
+        ? indicatorList[0] || node.indicator || "Belum ada indikator"
+        : node.indicator || "Belum ada indikator";
+    indicatorHtml = `<span class="pk-ind-single">${esc(singleInd)}</span>`;
+  }
 
-  return `<div class="node" style="border-color:${colors[0]};-webkit-print-color-adjust:exact;print-color-adjust:exact"><div class="head" style="background:${colors[1]};color:#fff;-webkit-print-color-adjust:exact;print-color-adjust:exact">${esc(title)}</div>${bidangBadge}<div class="indicator">${indicatorHtml}</div></div>`;
+  return `<div data-node-id="${esc(nodeId)}" class="pk-node" style="border-color:${colors.border}">
+    <span class="pk-level" style="color:${colors.label}">${esc(level)}</span>
+    <span class="pk-head" style="background:${colors.head}">${esc(title)}</span>
+    ${bidangHtml}
+    ${indicatorHtml}
+  </div>`;
 }
 
 export function printPohonKinerjaTree(ultimates, meta) {
@@ -903,63 +935,382 @@ export function printPohonKinerjaTree(ultimates, meta) {
     return;
   }
 
-  // Untuk setiap Ultimate, kita ambil data pertama saja (biasanya hanya 1 ultimate)
   const u = ultimates[0];
+  const ultimateId = `ultimate-${u.id || 1}`;
   const intermediates = u.intermediates || [];
+  const edges = [];
 
-  // Bangun kolom per Intermediate (= "branch")
-  const childRows = intermediates.map((it) => {
-    // Intermediate node
-    const intNode = printNodeHtml("INTERMEDIATE", it);
+  const branchesHtml = intermediates
+    .map((it, itIdx) => {
+      const intId = `intermediate-${it.id || itIdx}`;
+      edges.push({ fromId: ultimateId, toId: intId, orthogonal: true, hasArrow: true });
 
-    // Immediate + Output nodes di bawahnya
-    const immediates = it.immediates || [];
-    const childNodes = immediates.map((im) => {
-      const immNode = printNodeHtml("IMMEDIATE", im);
-      const outputs = (im.outputs || []).map((o) => printNodeHtml("OUTPUT", o)).join("");
-      return immNode + outputs;
-    }).join("");
+      const immediates = it.immediates || [];
+      const immediatesHtml =
+        immediates.length > 0
+          ? `<div class="pk-imm-row">${immediates
+              .map((im, imIdx) => {
+                const immId = `immediate-${im.id || `${itIdx}-${imIdx}`}`;
+                edges.push({ fromId: intId, toId: immId, orthogonal: true, hasArrow: true });
 
-    return `<section class="branch">${intNode}${childNodes}</section>`;
-  }).join("");
+                const outputs = im.outputs || [];
+                const outputsHtml =
+                  outputs.length > 0
+                    ? `<div class="pk-out-col">${outputs
+                        .map((o, oIdx) => {
+                          const outId = `output-${o.id || `${itIdx}-${imIdx}-${oIdx}`}`;
+                          edges.push({
+                            fromId: immId,
+                            toId: outId,
+                            orthogonal: false,
+                            hasArrow: true,
+                          });
+                          return `<div class="pk-out-item">${renderPkTreeNode("OUTPUT", o, outId)}</div>`;
+                        })
+                        .join("")}</div>`
+                    : "";
 
-  // Grid columns: sesuai jumlah intermediate
-  const gridCols = Math.max(intermediates.length, 1);
+                return `<div class="pk-imm-col">${renderPkTreeNode("IMMEDIATE", im, immId)}${outputsHtml}</div>`;
+              })
+              .join("")}</div>`
+          : "";
 
-  const html = `<!doctype html><html><head><title>Pohon Kinerja ${esc(meta.tahun)}</title><style>
-    *{box-sizing:border-box}
-    body{margin:0;padding:28px;background:#f7fbff;color:#0b1c30;font-family:Arial,sans-serif}
-    *{-webkit-print-color-adjust:exact;print-color-adjust:exact}
-    h1{margin:0 0 6px;color:#087f5b;font-size:22px;text-align:center}
-    h2{margin:0 0 28px;font-size:13px;text-align:center}
-    .root,.node{width:250px;margin:0 auto 22px;border:2px solid #2f6fb3;border-radius:8px;background:#fff;text-align:center;overflow:hidden}
-    .root{border-color:#ef6a6a;margin-bottom:28px}
-    .head{padding:11px 12px;background:#2f6fb3;color:#fff;font-size:11px;font-weight:bold}
-    .root .head{background:#ed5c5c}
-    .indicator{padding:9px 12px;border-top:1px solid #dce3ec;font-size:10px}
-    .branches{display:grid;grid-template-columns:repeat(${gridCols},1fr);gap:30px;border-top:2px solid #94a3b8;padding-top:18px}
-    .branch{position:relative;padding-top:16px}
-    .branch:before{content:"";position:absolute;top:0;left:50%;height:16px;border-left:2px solid #94a3b8}
-    .branch .node:nth-child(2){border-color:#58b77c}
-    .branch .node:nth-child(2) .head{background:#159447}
-    .branch .node:nth-child(n+3){border-color:#e8a52d}
-    .branch .node:nth-child(n+3) .head{background:#e99b15}
-    .meta{text-align:center;margin-top:20px;font-size:9px;color:#64748b;font-style:italic}
-    @media print{body{padding:10mm}.branches{gap:12mm}}
-  </style></head><body>
-    <h1>POHON KINERJA</h1>
-    <h2>${esc((meta.unitKerja || "DINAS KOMUNIKASI DAN INFORMATIKA").toUpperCase())} &middot; TAHUN ${esc(meta.tahun)}</h2>
-    <div class="root">${printNodeHtml("ULTIMATE", u)}</div>
-    <div class="branches">${childRows}</div>
-    <div class="meta">Dicetak dari E-SAKIP${meta.dicetakOleh ? ` oleh ${esc(meta.dicetakOleh)}` : ""} pada ${esc(meta.tanggalCetak)}</div>
-    <script>window.onload=()=>{window.print()}</script>
-  </body></html>`;
+      return `<div class="pk-branch-col">
+        <div style="height:20px;flex-shrink:0"></div>
+        ${renderPkTreeNode("INTERMEDIATE", it, intId)}
+        <div style="margin:20px 0;height:20px;flex-shrink:0"></div>
+        ${immediatesHtml}
+      </div>`;
+    })
+    .join("");
+
+  const html = `<!doctype html>
+<html lang="id"><head><meta charset="utf-8" />
+<title>Pohon Kinerja ${esc(meta.tahun)}</title>
+<style>
+  @page { size: landscape; margin: 8mm; }
+  * { box-sizing: border-box; -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; }
+  body {
+    margin: 0;
+    padding: 0;
+    background: #f7fbff;
+    color: #0b1c30;
+    font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif;
+  }
+  #performance-tree {
+    width: 100%;
+    overflow: visible;
+    background: #f7fbff;
+  }
+  #tree-zoom-target {
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    width: max-content;
+    min-width: 0;
+    padding: 32px 32px 80px 32px;
+  }
+  .pk-banner {
+    position: relative;
+    margin: 0 auto 32px auto;
+    display: flex;
+    width: 288px;
+    flex-direction: column;
+    align-items: center;
+    border-radius: 8px;
+    border: 2px solid #34d399;
+    background: #ffffff;
+    padding: 16px;
+    text-align: center;
+    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05);
+  }
+  .pk-banner-title {
+    margin-bottom: 4px;
+    font-weight: 700;
+    font-size: 16px;
+    color: #059669;
+  }
+  .pk-banner-unit {
+    font-size: 12px;
+    font-weight: 700;
+    color: #0b1c30;
+  }
+  .pk-banner-year {
+    font-size: 12px;
+    color: #64748b;
+    margin-top: 2px;
+  }
+  .pk-ult-wrap {
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+  }
+  .pk-branches-row {
+    position: relative;
+    display: flex;
+    justify-content: center;
+    gap: 32px;
+    padding-top: 20px;
+  }
+  .pk-branch-col {
+    position: relative;
+    display: flex;
+    flex-shrink: 0;
+    flex-direction: column;
+    align-items: center;
+  }
+  .pk-imm-row {
+    position: relative;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: flex-start;
+    justify-content: center;
+    gap: 24px;
+  }
+  .pk-imm-col {
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+  }
+  .pk-out-col {
+    margin-top: 20px;
+    padding-top: 20px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 20px;
+  }
+  .pk-out-item {
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+  }
+  .pk-node {
+    position: relative;
+    display: flex;
+    width: 250px;
+    flex-direction: column;
+    overflow: visible;
+    border-radius: 8px;
+    border: 2px solid #60a5fa;
+    background: #ffffff;
+    text-align: center;
+    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05);
+  }
+  .pk-level {
+    position: absolute;
+    left: -28px;
+    top: 50%;
+    transform: translateY(-50%) rotate(180deg);
+    writing-mode: vertical-rl;
+    white-space: nowrap;
+    font-size: 9px;
+    font-weight: 700;
+    line-height: 1;
+    letter-spacing: 0.14em;
+  }
+  .pk-head {
+    min-height: 48px;
+    padding: 8px 12px;
+    font-size: 10px;
+    font-weight: 800;
+    line-height: 1.25;
+    color: #ffffff;
+    border-top-left-radius: 5px;
+    border-top-right-radius: 5px;
+  }
+  .pk-bidang {
+    border-top: 1px solid #dbeafe;
+    background: rgba(239, 246, 255, 0.9);
+    padding: 4px 8px;
+    font-size: 9px;
+    font-weight: 700;
+    color: #1e40af;
+  }
+  .pk-ind-single {
+    min-height: 37px;
+    border-top: 1px solid #e2e8f0;
+    padding: 8px 12px;
+    font-size: 10px;
+    line-height: 1.25;
+    color: #475569;
+    white-space: pre-line;
+    text-align: center;
+  }
+  .pk-ind-list {
+    min-height: 37px;
+    border-top: 1px solid #e2e8f0;
+    padding: 8px 12px;
+    font-size: 10px;
+    line-height: 1.25;
+    color: #475569;
+    text-align: left;
+  }
+  .pk-ind-row {
+    display: flex;
+    align-items: flex-start;
+    gap: 4px;
+  }
+  .pk-ind-row + .pk-ind-row {
+    margin-top: 4px;
+  }
+  .pk-ind-num {
+    font-weight: 700;
+    color: #1d4ed8;
+    flex-shrink: 0;
+  }
+  .pk-ind-txt {
+    word-break: break-word;
+  }
+  #pk-svg {
+    pointer-events: none;
+    position: absolute;
+    left: 0;
+    top: 0;
+    width: 100%;
+    height: 100%;
+    overflow: visible;
+  }
+  @media print {
+    body { background: #ffffff; overflow: visible !important; }
+    #performance-tree { background: #ffffff; }
+    #tree-zoom-target {
+      width: max-content !important;
+      min-width: 0 !important;
+      zoom: 0.7;
+      transform-origin: top left;
+    }
+  }
+</style>
+</head>
+<body>
+  <div id="performance-tree">
+    <div id="tree-zoom-target">
+      <svg id="pk-svg">
+        <defs>
+          <marker id="tree-arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+            <path d="M0,0 L10,5 L0,10 z" fill="#94a3b8" />
+          </marker>
+        </defs>
+      </svg>
+
+      <div class="pk-banner">
+        <div class="pk-banner-title">POHON KINERJA</div>
+        <div class="pk-banner-unit">${esc((meta.unitKerja || "DINAS KOMUNIKASI DAN INFORMATIKA").toUpperCase())}</div>
+        <div class="pk-banner-year">TAHUN ${esc(meta.tahun)}</div>
+      </div>
+
+      <div class="pk-ult-wrap">
+        ${renderPkTreeNode("ULTIMATE", u, ultimateId)}
+        <div style="height:32px"></div>
+      </div>
+
+      <div class="pk-branches-row">
+        ${branchesHtml}
+      </div>
+    </div>
+  </div>
+
+  <script>
+    (function () {
+      var edges = ${JSON.stringify(edges)};
+      function getRelRect(el, container) {
+        var x = 0;
+        var y = 0;
+        var cur = el;
+        while (cur && cur !== container) {
+          x += cur.offsetLeft;
+          y += cur.offsetTop;
+          cur = cur.offsetParent;
+        }
+        return {
+          left: x,
+          top: y,
+          width: el.offsetWidth,
+          height: el.offsetHeight,
+          bottom: y + el.offsetHeight,
+        };
+      }
+
+      function drawConnectors() {
+        var container = document.getElementById("tree-zoom-target");
+        var svg = document.getElementById("pk-svg");
+        if (!container || !svg) return;
+        var w = container.offsetWidth || container.scrollWidth;
+        var h = container.offsetHeight || container.scrollHeight;
+        svg.setAttribute("viewBox", "0 0 " + w + " " + h);
+        svg.setAttribute("preserveAspectRatio", "none");
+
+        var oldLines = svg.querySelectorAll(".pk-edge");
+        oldLines.forEach(function (el) { el.remove(); });
+
+        var ns = "http://www.w3.org/2000/svg";
+        edges.forEach(function (edge) {
+          var a = container.querySelector('[data-node-id="' + edge.fromId + '"]');
+          var b = container.querySelector('[data-node-id="' + edge.toId + '"]');
+          if (!a || !b) return;
+          var rectA = getRelRect(a, container);
+          var rectB = getRelRect(b, container);
+          var x1 = rectA.left + rectA.width / 2;
+          var y1 = rectA.bottom;
+          var x2 = rectB.left + rectB.width / 2;
+          var y2 = rectB.top;
+
+          if (edge.orthogonal) {
+            var midY = (y1 + y2) / 2;
+            var path = document.createElementNS(ns, "path");
+            path.setAttribute("class", "pk-edge");
+            path.setAttribute("d", "M " + x1 + " " + y1 + " L " + x1 + " " + midY + " L " + x2 + " " + midY + " L " + x2 + " " + y2);
+            path.setAttribute("fill", "none");
+            path.setAttribute("stroke", "#94a3b8");
+            path.setAttribute("stroke-width", "1.5");
+            if (edge.hasArrow !== false) path.setAttribute("marker-end", "url(#tree-arrow)");
+            svg.appendChild(path);
+          } else {
+            var line = document.createElementNS(ns, "line");
+            line.setAttribute("class", "pk-edge");
+            line.setAttribute("x1", x1);
+            line.setAttribute("y1", y1);
+            line.setAttribute("x2", x2);
+            line.setAttribute("y2", y2);
+            line.setAttribute("stroke", "#94a3b8");
+            line.setAttribute("stroke-width", "1.5");
+            if (edge.hasArrow !== false) line.setAttribute("marker-end", "url(#tree-arrow)");
+            svg.appendChild(line);
+          }
+        });
+      }
+
+      window.addEventListener("resize", drawConnectors);
+      window.addEventListener("beforeprint", drawConnectors);
+      if (typeof ResizeObserver !== "undefined") {
+        var ro = new ResizeObserver(drawConnectors);
+        var target = document.getElementById("tree-zoom-target");
+        if (target) ro.observe(target);
+      }
+
+      window.onload = function () {
+        drawConnectors();
+        setTimeout(function () {
+          drawConnectors();
+          window.focus();
+          window.print();
+        }, 100);
+      };
+    })();
+  </script>
+</body></html>`;
 
   const win = window.open("", "_blank", "width=1400,height=900");
   if (!win) {
     alert("Pop-up diblokir browser. Izinkan pop-up untuk mencetak laporan.");
     return;
   }
+  win.document.open();
   win.document.write(html);
   win.document.close();
 }

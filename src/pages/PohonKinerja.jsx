@@ -382,7 +382,7 @@ function EditablePohonKinerja() {
   const [loadingArchivedView, setLoadingArchivedView] = useState(false);
 
   // Filter states
-  const [tahun, setTahun] = useState("2026");
+  const [tahun, setTahun] = useState("");
   const [unitKerja, setUnitKerja] = useState("");
   
   // Data states
@@ -447,9 +447,12 @@ function EditablePohonKinerja() {
 
         if (response.ok) {
           setAvailableYears(data.data || []);
-          // Set default tahun to first available year if available
-          if (data.data && data.data.length > 0 && !tahun) {
-            setTahun(String(data.data[0]));
+          // Set default tahun ke tahun aktif dari Pohon Kinerja
+          const defaultYear = data.active_year ?? data.data?.[0];
+          if (defaultYear && !tahun) {
+            setTahun(String(defaultYear));
+          } else if (!tahun) {
+            setTahun(String(new Date().getFullYear()));
           }
         }
       } catch (err) {
