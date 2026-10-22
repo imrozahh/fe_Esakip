@@ -11,8 +11,8 @@ const DAFTAR_PERIODE = [
 
 export default function CapaianKinerja() {
   const currentYear = new Date().getFullYear();
-  const [tahun, setTahun] = useState(currentYear);
-  const [availableYears, setAvailableYears] = useState([currentYear]);
+  const [tahun, setTahun] = useState(null);
+  const [availableYears, setAvailableYears] = useState([]);
   const [data, setData] = useState({ unit_kerja: "", intermediates: [] });
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
@@ -38,7 +38,7 @@ export default function CapaianKinerja() {
     }, 3500);
   };
 
-  // Fetch Available Years
+  // Fetch Available Years & pilih tahun aktif dari Pohon Kinerja
   useEffect(() => {
     const fetchYears = async () => {
       try {
@@ -47,14 +47,16 @@ export default function CapaianKinerja() {
           const years = resp.data.data.map(Number);
           if (years.length > 0) {
             setAvailableYears(years);
-            if (!years.includes(Number(tahun))) {
-              setTahun(years[0]);
-            }
+            const activeYear = Number(resp.data.active_year) || years[0];
+            setTahun(activeYear);
+            return;
           }
         }
       } catch (err) {
         console.warn("Gagal mengambil daftar tahun, memakai default", err);
       }
+      setAvailableYears([currentYear]);
+      setTahun(currentYear);
     };
 
     fetchYears();
@@ -62,6 +64,7 @@ export default function CapaianKinerja() {
 
   // Fetch Capaian Data
   const fetchData = async () => {
+    if (!tahun) return;
     setLoading(true);
     setError(null);
     try {
@@ -80,7 +83,9 @@ export default function CapaianKinerja() {
   };
 
   useEffect(() => {
-    fetchData();
+    if (tahun) {
+      fetchData();
+    }
   }, [tahun]);
 
   // Summary Calculations
@@ -306,7 +311,7 @@ export default function CapaianKinerja() {
               Tahun:
             </span>
             <select
-              value={tahun}
+              value={tahun ?? ""}
               onChange={(e) => setTahun(Number(e.target.value))}
               className="bg-transparent text-sm font-bold text-[#001e40] focus:outline-none cursor-pointer"
             >

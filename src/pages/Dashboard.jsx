@@ -73,6 +73,14 @@ export default function Dashboard() {
   const midnightTimerRef = useRef(null);
 
   useEffect(() => {
+    fetch(`${API_BASE_URL}/api/pohon-kinerja/years`)
+      .then((res) => (res.ok ? res.json() : null))
+      .then((json) => {
+        const yr = Number(json?.active_year) || Number(json?.data?.[0]);
+        if (yr) setActiveYear(yr);
+      })
+      .catch(() => {});
+
     function scheduleMidnightCheck() {
       midnightTimerRef.current = setTimeout(() => {
         setActiveYear(new Date().getFullYear());

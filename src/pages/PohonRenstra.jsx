@@ -1129,7 +1129,7 @@ function RenstraTable({ data, archived, loading, onDetail }) {
 
 function PohonRenstra() {
   const [data, setData] = useState([]);
-  const [year, setYear] = useState("2026");
+  const [year, setYear] = useState("");
   const [detail, setDetail] = useState(null);
   const [editData, setEditData] = useState(null);
   const [saving, setSaving] = useState(false);
@@ -1156,9 +1156,10 @@ function PohonRenstra() {
 
         if (response.ok) {
           setAvailableYears(data.data || []);
-          // Set default year to first available year if available
-          if (data.data && data.data.length > 0) {
-            setYear(String(data.data[0]));
+          // Set default year ke tahun aktif dari Pohon Kinerja
+          const defaultYear = data.active_year ?? data.data?.[0];
+          if (defaultYear) {
+            setYear(String(defaultYear));
           }
         } else {
           console.error("Gagal mengambil daftar tahun:", data.message);
