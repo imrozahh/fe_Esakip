@@ -152,71 +152,130 @@ export function buildPohonKinerja(ultimates = []) {
 
 /* =========================================================
    BUILDER: RENCANA STRATEGIS (RENSTRA / CASCADING)
+   Format 24 kolom — sama persis dengan export Excel di halaman
+   Rencana Strategis (PohonRenstra).
 ========================================================= */
+
+// Helper: gabungkan target + satuan jadi satu string.
+const fmtTS = (target, satuan) =>
+  [target, satuan]
+    .map((p) => String(p ?? "").trim())
+    .filter(Boolean)
+    .join(" ");
+
+const EMPTY_IMMEDIATE = {
+  title: "", program: "", nomenklaturSipd: "", indicator: "", target: "", outputs: [],
+};
+const EMPTY_OUTPUT = {
+  title: "", kegiatan: "", nomenklaturSipd: "", indicator: "", target: "",
+  outputInput: "", anggaran: undefined, subKegiatan: [],
+};
 
 export function buildRenstra(ultimates = []) {
   const columns = [
-    { key: "no", label: "No", align: "center", width: 5 },
-    { key: "tujuan", label: "Tujuan", width: 30, mergeBy: "_gUlt" },
-    { key: "sasaran", label: "Sasaran Strategis", width: 30, mergeBy: "_gInt" },
-    { key: "indikatorSasaran", label: "Indikator Sasaran", width: 32, mergeBy: "_gInt" },
-    { key: "targetSasaran", label: "Target Sasaran", width: 16, align: "center", mergeBy: "_gInt" },
-    { key: "program", label: "Program", width: 30, mergeBy: "_gImm" },
-    { key: "kegiatan", label: "Kegiatan", width: 30 },
-    { key: "subKegiatan", label: "Sub Kegiatan", width: 32 },
-    { key: "indikatorSub", label: "Indikator Sub Kegiatan", width: 32 },
-    { key: "targetSub", label: "Target Sub Kegiatan", width: 16, align: "center" },
-    { key: "anggaran", label: "Anggaran (Rp)", width: 20, align: "right", type: "currency" },
+    { key: "ultimateOutcome", label: "Ultimate Outcome", width: 18, mergeBy: "_gUlt" },
+    { key: "tujuan", label: "Tujuan", width: 14, mergeBy: "_gUlt" },
+    { key: "indikatorUlt", label: "Indikator", width: 14, mergeBy: "_gUlt" },
+    { key: "targetUlt", label: "Target/ Satuan", width: 18, align: "center", mergeBy: "_gUlt" },
+    { key: "intermediateOutcome", label: "Intermediate Outcome", width: 38, mergeBy: "_gInt" },
+    { key: "sasaran", label: "Sasaran", width: 30, mergeBy: "_gInt" },
+    { key: "indikatorInt", label: "Indikator", width: 13, mergeBy: "_gIntInd" },
+    { key: "targetInt", label: "Target/ Satuan", width: 18, align: "center", mergeBy: "_gIntInd" },
+    { key: "immediateOutcome", label: "Immediate Outcome", width: 26, mergeBy: "_gImm" },
+    { key: "program", label: "Program", width: 21, mergeBy: "_gImm" },
+    { key: "nomenklaturImm", label: "Nomenklatur SIPD", width: 19, mergeBy: "_gImm" },
+    { key: "indikatorImm", label: "Indikator", width: 18, mergeBy: "_gImm" },
+    { key: "targetImm", label: "Target/ Satuan", width: 19, align: "center", mergeBy: "_gImm" },
+    { key: "output", label: "Output", width: 27 },
+    { key: "kegiatan", label: "Kegiatan", width: 23 },
+    { key: "nomenklaturOut", label: "Nomenklatur SIPD", width: 21 },
+    { key: "indikatorOut", label: "Indikator", width: 17 },
+    { key: "targetOut", label: "Target/ Satuan", width: 18, align: "center" },
+    { key: "outputInput", label: "Output/ Input", width: 20 },
+    { key: "anggaran", label: "Anggaran", width: 17, align: "right", type: "currency" },
+    { key: "subKegiatan", label: "Sub Kegiatan", width: 20 },
+    { key: "nomenklaturSub", label: "Nomenklatur SIPD", width: 19 },
+    { key: "indikatorSub", label: "Indikator", width: 26 },
+    { key: "targetSub", label: "Target/ Satuan", width: 17, align: "center" },
   ];
 
   const rows = [];
-  let no = 0;
   let totalAnggaran = 0;
 
   ultimates.forEach((u) => {
-    (u.intermediates || []).forEach((it) => {
-      const gInt = `u${u.id}-i${it.id}`;
-      const indRows = it.indicators || [];
-      const base = {
-        _gUlt: `u${u.id}`,
-        _gInt: gInt,
-        tujuan: u.tujuan || u.title,
-        sasaran: it.sasaran || it.title,
-        indikatorSasaran: indRows.map((r) => r.indicator).filter(Boolean).join("\n"),
-        targetSasaran: indRows
-          .map((r) => [r.target, r.satuan].filter(Boolean).join(" "))
-          .filter(Boolean)
-          .join("\n"),
-      };
+    const intermediates = u.intermediates || [];
+    if (intermediates.length === 0) {
+      rows.push({
+        _gUlt: `u${u.id}`, _gInt: `u${u.id}-x`, _gIntInd: `u${u.id}-x`, _gImm: `u${u.id}-x-x`,
+        ultimateOutcome: u.title, tujuan: u.tujuan, indikatorUlt: u.indicator, targetUlt: u.target,
+      });
+      return;
+    }
 
-      const immediates = it.immediates || [];
-      if (immediates.length === 0) {
-        rows.push({ ...base, _gImm: `${gInt}-x`, no: ++no });
-        return;
+    intermediates.forEach((it) => {
+      const gInt = `u${u.id}-i${it.id}`;
+      const indicators = it.indicators || [];
+
+      // Kumpulkan semua leaf (Immediate→Output) di bawah intermediate ini
+      const leaves = [];
+      const immediates = (it.immediates || []).length ? it.immediates : [EMPTY_IMMEDIATE];
+      immediates.forEach((im) => {
+        const outputs = (im.outputs || []).length ? im.outputs : [EMPTY_OUTPUT];
+        outputs.forEach((o) => leaves.push({ immediate: im, output: o }));
+      });
+
+      // Jumlah baris = max(leaves, indicators, 1)
+      const totalRows = Math.max(leaves.length, indicators.length, 1);
+      while (leaves.length < totalRows) {
+        const last = leaves[leaves.length - 1];
+        leaves.push({ immediate: last.immediate, output: EMPTY_OUTPUT });
       }
 
-      immediates.forEach((im) => {
-        const gImm = `${gInt}-m${im.id}`;
-        const outputs = im.outputs || [];
-        if (outputs.length === 0) {
-          rows.push({ ...base, _gImm: gImm, no: ++no, program: im.program || im.title });
-          return;
-        }
-        outputs.forEach((o) => {
-          const sub = (o.subKegiatan || [])[0] || {};
-          const anggaran = toNum(o.anggaran);
-          totalAnggaran += anggaran;
-          rows.push({
-            ...base,
-            _gImm: gImm,
-            no: ++no,
-            program: im.program || im.title,
-            kegiatan: o.kegiatan,
-            subKegiatan: sub.title,
-            indikatorSub: sub.indicator,
-            targetSub: sub.target,
-            anggaran,
-          });
+      leaves.forEach(({ immediate: im, output: o }, rowIndex) => {
+        // Indikator di-distribute merata ke baris-baris
+        const indicatorRow = indicators.length
+          ? indicators[Math.floor((rowIndex * indicators.length) / totalRows)]
+          : null;
+        // Group key per indikator row supaya merge benar
+        const indIdx = indicators.length
+          ? Math.floor((rowIndex * indicators.length) / totalRows)
+          : 0;
+        const gIntInd = `${gInt}-ind${indIdx}`;
+
+        const gImm = im.id ? `${gInt}-m${im.id}` : `${gInt}-mx`;
+        const sub = (o.subKegiatan || [])[0] || {};
+        const anggaran = o.anggaran !== undefined ? toNum(o.anggaran) : null;
+        if (anggaran) totalAnggaran += anggaran;
+
+        rows.push({
+          _gUlt: `u${u.id}`,
+          _gInt: gInt,
+          _gIntInd: gIntInd,
+          _gImm: gImm,
+          ultimateOutcome: u.title || "",
+          tujuan: u.tujuan || "",
+          indikatorUlt: u.indicator || "",
+          targetUlt: u.target || "",
+          intermediateOutcome: it.title || "",
+          sasaran: it.sasaran || "",
+          indikatorInt: indicatorRow?.indicator || "",
+          targetInt: indicatorRow ? fmtTS(indicatorRow.target, indicatorRow.satuan) : "",
+          immediateOutcome: im.title || "",
+          program: im.program || "",
+          nomenklaturImm: im.nomenklaturSipd || "",
+          indikatorImm: im.indicator || "",
+          targetImm: im.target || "",
+          output: o.title || "",
+          kegiatan: o.kegiatan || "",
+          nomenklaturOut: o.nomenklaturSipd || "",
+          indikatorOut: o.indicator || "",
+          targetOut: o.target || "",
+          outputInput: o.outputInput || "",
+          anggaran: anggaran ?? "",
+          subKegiatan: sub.title || "",
+          nomenklaturSub: sub.nomenklaturSipd || "",
+          indikatorSub: sub.indicator || "",
+          targetSub: sub.target || "",
         });
       });
     });
@@ -229,6 +288,120 @@ export function buildRenstra(ultimates = []) {
     total: rows.length,
     filled: rows.length,
   };
+}
+
+/* =========================================================
+   EXPORT EXCEL KHUSUS RENSTRA — CASCADING BERWARNA
+   Sama persis dengan format Excel di halaman Rencana Strategis.
+========================================================= */
+
+const RENSTRA_HEADER = [
+  "Ultimate Outcome", "Tujuan", "Indikator", "Target/ Satuan",
+  "Intermediate Outcome", "Sasaran", "Indikator", "Target/ Satuan",
+  "Immediate Outcome", "Program", "Nomenklatur SIPD", "Indikator", "Target/ Satuan",
+  "Output", "Kegiatan", "Nomenklatur SIPD", "Indikator", "Target/ Satuan",
+  "Output/ Input", "Anggaran",
+  "Sub Kegiatan", "Nomenklatur SIPD", "Indikator", "Target/ Satuan",
+];
+
+const RC_RED = "FFFF5050";
+const RC_BLUE = "FF5B9BD5";
+const RC_GREEN = "FF92D050";
+const RC_ORANGE = "FFFFC000";
+const RC_GRAY = "FFD8D8D8";
+const RC_YELLOW = "FFFFCC29";
+
+const RENSTRA_HEADER_COLORS = [
+  RC_RED, RC_RED, RC_RED, RC_RED,
+  RC_BLUE, RC_RED, RC_RED, RC_RED,
+  RC_GREEN, RC_BLUE, RC_BLUE, RC_BLUE, RC_BLUE,
+  RC_ORANGE, RC_GREEN, RC_GREEN, RC_GREEN, RC_GREEN,
+  RC_GRAY, RC_GRAY,
+  RC_YELLOW, RC_YELLOW, RC_YELLOW, RC_YELLOW,
+];
+
+const RENSTRA_DATA_NAME_COLORS = {
+  0: RC_RED,    // Ultimate Outcome
+  4: RC_BLUE,   // Intermediate Outcome
+  8: RC_GREEN,  // Immediate Outcome
+  13: RC_ORANGE, // Output
+};
+
+const RENSTRA_COL_WIDTHS = [
+  18, 14, 14, 18, 38, 30, 13, 18, 26, 21, 19, 18, 19, 27, 23, 21, 17, 18, 20, 17, 20, 19, 26, 17,
+];
+
+const RENSTRA_BORDER = {
+  top: { style: "thin", color: { rgb: "FF000000" } },
+  bottom: { style: "thin", color: { rgb: "FF000000" } },
+  left: { style: "thin", color: { rgb: "FF000000" } },
+  right: { style: "thin", color: { rgb: "FF000000" } },
+};
+
+function renstraHeaderStyle(bgColor) {
+  return {
+    fill: { patternType: "solid", fgColor: { rgb: bgColor } },
+    font: { bold: true, sz: 11, name: "Calibri", color: { rgb: "FF000000" } },
+    alignment: { horizontal: "center", vertical: "center", wrapText: true },
+    border: RENSTRA_BORDER,
+  };
+}
+
+function renstraDataStyle(bgColor) {
+  return {
+    fill: bgColor ? { patternType: "solid", fgColor: { rgb: bgColor } } : { patternType: "none" },
+    font: { sz: 11, name: "Calibri" },
+    alignment: { vertical: "top", wrapText: true },
+    border: RENSTRA_BORDER,
+  };
+}
+
+const RENSTRA_COL_KEYS = [
+  "ultimateOutcome", "tujuan", "indikatorUlt", "targetUlt",
+  "intermediateOutcome", "sasaran", "indikatorInt", "targetInt",
+  "immediateOutcome", "program", "nomenklaturImm", "indikatorImm", "targetImm",
+  "output", "kegiatan", "nomenklaturOut", "indikatorOut", "targetOut",
+  "outputInput", "anggaran",
+  "subKegiatan", "nomenklaturSub", "indikatorSub", "targetSub",
+];
+
+const ANGGARAN_COL_IDX = 19;
+
+export function exportRenstraExcel(renstraRows, year) {
+  const dataRows = renstraRows.map((row) =>
+    RENSTRA_COL_KEYS.map((key) => {
+      const v = row[key];
+      if (v === null || v === undefined || v === "") return "";
+      return v;
+    })
+  );
+
+  const sheetData = [RENSTRA_HEADER, ...dataRows];
+  const ws = XLSX.utils.aoa_to_sheet(sheetData);
+
+  for (let r = 0; r < sheetData.length; r++) {
+    for (let c = 0; c < RENSTRA_HEADER.length; c++) {
+      const ref = XLSX.utils.encode_cell({ r, c });
+      if (!ws[ref]) ws[ref] = { t: "s", v: "" };
+      ws[ref].s = r === 0
+        ? renstraHeaderStyle(RENSTRA_HEADER_COLORS[c])
+        : renstraDataStyle(RENSTRA_DATA_NAME_COLORS[c]);
+
+      // Kolom Anggaran: format angka
+      if (r > 0 && c === ANGGARAN_COL_IDX) {
+        ws[ref].s.numFmt = "#,##0";
+        if (typeof ws[ref].v === "number") ws[ref].t = "n";
+      }
+    }
+  }
+
+  ws["!cols"] = RENSTRA_COL_WIDTHS.map((wch) => ({ wch }));
+  ws["!rows"] = [{ hpt: 30 }];
+  ws["!freeze"] = { xSplit: 0, ySplit: 1 };
+
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, "CASECADING");
+  XLSX.writeFile(wb, `casecading-renstra-${year}.xlsx`);
 }
 
 /* =========================================================
@@ -690,6 +863,106 @@ const esc = (s) =>
     .replace(/</g, "&lt;")
     .replace(/>/g, "&gt;")
     .replace(/"/g, "&quot;");
+
+/* =========================================================
+   CETAK POHON KINERJA — FORMAT DIAGRAM POHON (TREE)
+   Port langsung dari printTree / printNode di PohonKinerja.jsx.
+   Struktur data: ultimates[].intermediates[].immediates[].outputs[]
+   (dari endpoint /renstra).
+========================================================= */
+
+function printNodeHtml(level, node) {
+  const colors = {
+    ULTIMATE: ["#ef5b5b", "#ef5b5b"],
+    INTERMEDIATE: ["#2563eb", "#2563eb"],
+    IMMEDIATE: ["#059669", "#059669"],
+    OUTPUT: ["#f59e0b", "#f59e0b"],
+  }[level] || ["#2563eb", "#2563eb"];
+
+  const bidangBadge = level === "INTERMEDIATE" && node.bidang
+    ? `<div style="padding:4px;background:#e0edff;color:#1e40af;font-size:9px;font-weight:bold;text-transform:capitalize">Bidang ${esc(BIDANG_LABEL[node.bidang] || node.bidang)}</div>`
+    : "";
+
+  let indicatorHtml;
+  if (level === "INTERMEDIATE" && Array.isArray(node.indicators) && node.indicators.length > 1) {
+    indicatorHtml = `<ul style="margin:0;padding-left:14px;text-align:left">${node.indicators.map((r) => `<li>${esc(r.indicator || "")}</li>`).join("")}</ul>`;
+  } else if (level === "INTERMEDIATE" && Array.isArray(node.indicators) && node.indicators.length === 1) {
+    indicatorHtml = esc(node.indicators[0].indicator || "Belum ada indikator");
+  } else {
+    indicatorHtml = esc(node.indicator || node.title || "Belum ada indikator");
+  }
+
+  const title = level === "INTERMEDIATE" ? (node.title || node.sasaran || "-") : (node.title || "-");
+
+  return `<div class="node" style="border-color:${colors[0]};-webkit-print-color-adjust:exact;print-color-adjust:exact"><div class="head" style="background:${colors[1]};color:#fff;-webkit-print-color-adjust:exact;print-color-adjust:exact">${esc(title)}</div>${bidangBadge}<div class="indicator">${indicatorHtml}</div></div>`;
+}
+
+export function printPohonKinerjaTree(ultimates, meta) {
+  if (!ultimates || ultimates.length === 0) {
+    alert("Belum ada data Pohon Kinerja untuk dicetak.");
+    return;
+  }
+
+  // Untuk setiap Ultimate, kita ambil data pertama saja (biasanya hanya 1 ultimate)
+  const u = ultimates[0];
+  const intermediates = u.intermediates || [];
+
+  // Bangun kolom per Intermediate (= "branch")
+  const childRows = intermediates.map((it) => {
+    // Intermediate node
+    const intNode = printNodeHtml("INTERMEDIATE", it);
+
+    // Immediate + Output nodes di bawahnya
+    const immediates = it.immediates || [];
+    const childNodes = immediates.map((im) => {
+      const immNode = printNodeHtml("IMMEDIATE", im);
+      const outputs = (im.outputs || []).map((o) => printNodeHtml("OUTPUT", o)).join("");
+      return immNode + outputs;
+    }).join("");
+
+    return `<section class="branch">${intNode}${childNodes}</section>`;
+  }).join("");
+
+  // Grid columns: sesuai jumlah intermediate
+  const gridCols = Math.max(intermediates.length, 1);
+
+  const html = `<!doctype html><html><head><title>Pohon Kinerja ${esc(meta.tahun)}</title><style>
+    *{box-sizing:border-box}
+    body{margin:0;padding:28px;background:#f7fbff;color:#0b1c30;font-family:Arial,sans-serif}
+    *{-webkit-print-color-adjust:exact;print-color-adjust:exact}
+    h1{margin:0 0 6px;color:#087f5b;font-size:22px;text-align:center}
+    h2{margin:0 0 28px;font-size:13px;text-align:center}
+    .root,.node{width:250px;margin:0 auto 22px;border:2px solid #2f6fb3;border-radius:8px;background:#fff;text-align:center;overflow:hidden}
+    .root{border-color:#ef6a6a;margin-bottom:28px}
+    .head{padding:11px 12px;background:#2f6fb3;color:#fff;font-size:11px;font-weight:bold}
+    .root .head{background:#ed5c5c}
+    .indicator{padding:9px 12px;border-top:1px solid #dce3ec;font-size:10px}
+    .branches{display:grid;grid-template-columns:repeat(${gridCols},1fr);gap:30px;border-top:2px solid #94a3b8;padding-top:18px}
+    .branch{position:relative;padding-top:16px}
+    .branch:before{content:"";position:absolute;top:0;left:50%;height:16px;border-left:2px solid #94a3b8}
+    .branch .node:nth-child(2){border-color:#58b77c}
+    .branch .node:nth-child(2) .head{background:#159447}
+    .branch .node:nth-child(n+3){border-color:#e8a52d}
+    .branch .node:nth-child(n+3) .head{background:#e99b15}
+    .meta{text-align:center;margin-top:20px;font-size:9px;color:#64748b;font-style:italic}
+    @media print{body{padding:10mm}.branches{gap:12mm}}
+  </style></head><body>
+    <h1>POHON KINERJA</h1>
+    <h2>${esc((meta.unitKerja || "DINAS KOMUNIKASI DAN INFORMATIKA").toUpperCase())} &middot; TAHUN ${esc(meta.tahun)}</h2>
+    <div class="root">${printNodeHtml("ULTIMATE", u)}</div>
+    <div class="branches">${childRows}</div>
+    <div class="meta">Dicetak dari E-SAKIP${meta.dicetakOleh ? ` oleh ${esc(meta.dicetakOleh)}` : ""} pada ${esc(meta.tanggalCetak)}</div>
+    <script>window.onload=()=>{window.print()}</script>
+  </body></html>`;
+
+  const win = window.open("", "_blank", "width=1400,height=900");
+  if (!win) {
+    alert("Pop-up diblokir browser. Izinkan pop-up untuk mencetak laporan.");
+    return;
+  }
+  win.document.write(html);
+  win.document.close();
+}
 
 export function printReport(report, meta) {
   const { columns, rows, footer } = report.data;

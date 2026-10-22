@@ -14,8 +14,10 @@ import {
   computeSpans,
   exportAllExcel,
   exportReportExcel,
+  exportRenstraExcel,
   formatCell,
   hitungStatus,
+  printPohonKinerjaTree,
   printReport,
 } from "../utils/laporanBuilder";
 
@@ -154,7 +156,7 @@ export default function Laporan() {
       periodeLabel: "Tahunan",
       icon: "account_tree",
       sheetName: "Pohon Kinerja",
-      data: pohon,
+      data: { ...pohon, _ultimates: source.ultimates },
       status: hitungStatus(pohon.filled, pohon.total, "master"),
     });
 
@@ -518,14 +520,22 @@ export default function Laporan() {
                               title="Cetak / simpan PDF"
                               tone="slate"
                               disabled={noData}
-                              onClick={() => printReport(r, meta)}
+                              onClick={() =>
+                                r.kategori === "pohon"
+                                  ? printPohonKinerjaTree(r.data._ultimates, meta)
+                                  : printReport(r, meta)
+                              }
                             />
                             <IconButton
                               icon="table_view"
                               title="Unduh Excel"
                               tone="green"
                               disabled={noData}
-                              onClick={() => exportReportExcel(r, meta)}
+                              onClick={() =>
+                                r.kategori === "renstra"
+                                  ? exportRenstraExcel(r.data.rows, meta.tahun)
+                                  : exportReportExcel(r, meta)
+                              }
                             />
                           </div>
                         </td>
@@ -640,7 +650,11 @@ function PreviewModal({ report, meta, onClose }) {
           </div>
           <div className="flex items-center gap-2 shrink-0">
             <button
-              onClick={() => printReport(report, meta)}
+              onClick={() =>
+                report.kategori === "pohon"
+                  ? printPohonKinerjaTree(report.data._ultimates, meta)
+                  : printReport(report, meta)
+              }
               disabled={noData}
               className="flex items-center gap-1.5 px-3 py-2 bg-white/10 hover:bg-white/20 disabled:opacity-40 rounded-lg text-xs font-semibold"
             >
@@ -648,7 +662,11 @@ function PreviewModal({ report, meta, onClose }) {
               Cetak / PDF
             </button>
             <button
-              onClick={() => exportReportExcel(report, meta)}
+              onClick={() =>
+                report.kategori === "renstra"
+                  ? exportRenstraExcel(report.data.rows, meta.tahun)
+                  : exportReportExcel(report, meta)
+              }
               disabled={noData}
               className="flex items-center gap-1.5 px-3 py-2 bg-emerald-500 hover:bg-emerald-600 disabled:opacity-40 rounded-lg text-xs font-semibold"
             >
