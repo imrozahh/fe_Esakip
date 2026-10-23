@@ -152,71 +152,130 @@ export function buildPohonKinerja(ultimates = []) {
 
 /* =========================================================
    BUILDER: RENCANA STRATEGIS (RENSTRA / CASCADING)
+   Format 24 kolom — sama persis dengan export Excel di halaman
+   Rencana Strategis (PohonRenstra).
 ========================================================= */
+
+// Helper: gabungkan target + satuan jadi satu string.
+const fmtTS = (target, satuan) =>
+  [target, satuan]
+    .map((p) => String(p ?? "").trim())
+    .filter(Boolean)
+    .join(" ");
+
+const EMPTY_IMMEDIATE = {
+  title: "", program: "", nomenklaturSipd: "", indicator: "", target: "", outputs: [],
+};
+const EMPTY_OUTPUT = {
+  title: "", kegiatan: "", nomenklaturSipd: "", indicator: "", target: "",
+  outputInput: "", anggaran: undefined, subKegiatan: [],
+};
 
 export function buildRenstra(ultimates = []) {
   const columns = [
-    { key: "no", label: "No", align: "center", width: 5 },
-    { key: "tujuan", label: "Tujuan", width: 30, mergeBy: "_gUlt" },
-    { key: "sasaran", label: "Sasaran Strategis", width: 30, mergeBy: "_gInt" },
-    { key: "indikatorSasaran", label: "Indikator Sasaran", width: 32, mergeBy: "_gInt" },
-    { key: "targetSasaran", label: "Target Sasaran", width: 16, align: "center", mergeBy: "_gInt" },
-    { key: "program", label: "Program", width: 30, mergeBy: "_gImm" },
-    { key: "kegiatan", label: "Kegiatan", width: 30 },
-    { key: "subKegiatan", label: "Sub Kegiatan", width: 32 },
-    { key: "indikatorSub", label: "Indikator Sub Kegiatan", width: 32 },
-    { key: "targetSub", label: "Target Sub Kegiatan", width: 16, align: "center" },
-    { key: "anggaran", label: "Anggaran (Rp)", width: 20, align: "right", type: "currency" },
+    { key: "ultimateOutcome", label: "Ultimate Outcome", width: 18, mergeBy: "_gUlt" },
+    { key: "tujuan", label: "Tujuan", width: 14, mergeBy: "_gUlt" },
+    { key: "indikatorUlt", label: "Indikator", width: 14, mergeBy: "_gUlt" },
+    { key: "targetUlt", label: "Target/ Satuan", width: 18, align: "center", mergeBy: "_gUlt" },
+    { key: "intermediateOutcome", label: "Intermediate Outcome", width: 38, mergeBy: "_gInt" },
+    { key: "sasaran", label: "Sasaran", width: 30, mergeBy: "_gInt" },
+    { key: "indikatorInt", label: "Indikator", width: 13, mergeBy: "_gIntInd" },
+    { key: "targetInt", label: "Target/ Satuan", width: 18, align: "center", mergeBy: "_gIntInd" },
+    { key: "immediateOutcome", label: "Immediate Outcome", width: 26, mergeBy: "_gImm" },
+    { key: "program", label: "Program", width: 21, mergeBy: "_gImm" },
+    { key: "nomenklaturImm", label: "Nomenklatur SIPD", width: 19, mergeBy: "_gImm" },
+    { key: "indikatorImm", label: "Indikator", width: 18, mergeBy: "_gImm" },
+    { key: "targetImm", label: "Target/ Satuan", width: 19, align: "center", mergeBy: "_gImm" },
+    { key: "output", label: "Output", width: 27 },
+    { key: "kegiatan", label: "Kegiatan", width: 23 },
+    { key: "nomenklaturOut", label: "Nomenklatur SIPD", width: 21 },
+    { key: "indikatorOut", label: "Indikator", width: 17 },
+    { key: "targetOut", label: "Target/ Satuan", width: 18, align: "center" },
+    { key: "outputInput", label: "Output/ Input", width: 20 },
+    { key: "anggaran", label: "Anggaran", width: 17, align: "right", type: "currency" },
+    { key: "subKegiatan", label: "Sub Kegiatan", width: 20 },
+    { key: "nomenklaturSub", label: "Nomenklatur SIPD", width: 19 },
+    { key: "indikatorSub", label: "Indikator", width: 26 },
+    { key: "targetSub", label: "Target/ Satuan", width: 17, align: "center" },
   ];
 
   const rows = [];
-  let no = 0;
   let totalAnggaran = 0;
 
   ultimates.forEach((u) => {
-    (u.intermediates || []).forEach((it) => {
-      const gInt = `u${u.id}-i${it.id}`;
-      const indRows = it.indicators || [];
-      const base = {
-        _gUlt: `u${u.id}`,
-        _gInt: gInt,
-        tujuan: u.tujuan || u.title,
-        sasaran: it.sasaran || it.title,
-        indikatorSasaran: indRows.map((r) => r.indicator).filter(Boolean).join("\n"),
-        targetSasaran: indRows
-          .map((r) => [r.target, r.satuan].filter(Boolean).join(" "))
-          .filter(Boolean)
-          .join("\n"),
-      };
+    const intermediates = u.intermediates || [];
+    if (intermediates.length === 0) {
+      rows.push({
+        _gUlt: `u${u.id}`, _gInt: `u${u.id}-x`, _gIntInd: `u${u.id}-x`, _gImm: `u${u.id}-x-x`,
+        ultimateOutcome: u.title, tujuan: u.tujuan, indikatorUlt: u.indicator, targetUlt: u.target,
+      });
+      return;
+    }
 
-      const immediates = it.immediates || [];
-      if (immediates.length === 0) {
-        rows.push({ ...base, _gImm: `${gInt}-x`, no: ++no });
-        return;
+    intermediates.forEach((it) => {
+      const gInt = `u${u.id}-i${it.id}`;
+      const indicators = it.indicators || [];
+
+      // Kumpulkan semua leaf (Immediate→Output) di bawah intermediate ini
+      const leaves = [];
+      const immediates = (it.immediates || []).length ? it.immediates : [EMPTY_IMMEDIATE];
+      immediates.forEach((im) => {
+        const outputs = (im.outputs || []).length ? im.outputs : [EMPTY_OUTPUT];
+        outputs.forEach((o) => leaves.push({ immediate: im, output: o }));
+      });
+
+      // Jumlah baris = max(leaves, indicators, 1)
+      const totalRows = Math.max(leaves.length, indicators.length, 1);
+      while (leaves.length < totalRows) {
+        const last = leaves[leaves.length - 1];
+        leaves.push({ immediate: last.immediate, output: EMPTY_OUTPUT });
       }
 
-      immediates.forEach((im) => {
-        const gImm = `${gInt}-m${im.id}`;
-        const outputs = im.outputs || [];
-        if (outputs.length === 0) {
-          rows.push({ ...base, _gImm: gImm, no: ++no, program: im.program || im.title });
-          return;
-        }
-        outputs.forEach((o) => {
-          const sub = (o.subKegiatan || [])[0] || {};
-          const anggaran = toNum(o.anggaran);
-          totalAnggaran += anggaran;
-          rows.push({
-            ...base,
-            _gImm: gImm,
-            no: ++no,
-            program: im.program || im.title,
-            kegiatan: o.kegiatan,
-            subKegiatan: sub.title,
-            indikatorSub: sub.indicator,
-            targetSub: sub.target,
-            anggaran,
-          });
+      leaves.forEach(({ immediate: im, output: o }, rowIndex) => {
+        // Indikator di-distribute merata ke baris-baris
+        const indicatorRow = indicators.length
+          ? indicators[Math.floor((rowIndex * indicators.length) / totalRows)]
+          : null;
+        // Group key per indikator row supaya merge benar
+        const indIdx = indicators.length
+          ? Math.floor((rowIndex * indicators.length) / totalRows)
+          : 0;
+        const gIntInd = `${gInt}-ind${indIdx}`;
+
+        const gImm = im.id ? `${gInt}-m${im.id}` : `${gInt}-mx`;
+        const sub = (o.subKegiatan || [])[0] || {};
+        const anggaran = o.anggaran !== undefined ? toNum(o.anggaran) : null;
+        if (anggaran) totalAnggaran += anggaran;
+
+        rows.push({
+          _gUlt: `u${u.id}`,
+          _gInt: gInt,
+          _gIntInd: gIntInd,
+          _gImm: gImm,
+          ultimateOutcome: u.title || "",
+          tujuan: u.tujuan || "",
+          indikatorUlt: u.indicator || "",
+          targetUlt: u.target || "",
+          intermediateOutcome: it.title || "",
+          sasaran: it.sasaran || "",
+          indikatorInt: indicatorRow?.indicator || "",
+          targetInt: indicatorRow ? fmtTS(indicatorRow.target, indicatorRow.satuan) : "",
+          immediateOutcome: im.title || "",
+          program: im.program || "",
+          nomenklaturImm: im.nomenklaturSipd || "",
+          indikatorImm: im.indicator || "",
+          targetImm: im.target || "",
+          output: o.title || "",
+          kegiatan: o.kegiatan || "",
+          nomenklaturOut: o.nomenklaturSipd || "",
+          indikatorOut: o.indicator || "",
+          targetOut: o.target || "",
+          outputInput: o.outputInput || "",
+          anggaran: anggaran ?? "",
+          subKegiatan: sub.title || "",
+          nomenklaturSub: sub.nomenklaturSipd || "",
+          indikatorSub: sub.indicator || "",
+          targetSub: sub.target || "",
         });
       });
     });
@@ -229,6 +288,120 @@ export function buildRenstra(ultimates = []) {
     total: rows.length,
     filled: rows.length,
   };
+}
+
+/* =========================================================
+   EXPORT EXCEL KHUSUS RENSTRA — CASCADING BERWARNA
+   Sama persis dengan format Excel di halaman Rencana Strategis.
+========================================================= */
+
+const RENSTRA_HEADER = [
+  "Ultimate Outcome", "Tujuan", "Indikator", "Target/ Satuan",
+  "Intermediate Outcome", "Sasaran", "Indikator", "Target/ Satuan",
+  "Immediate Outcome", "Program", "Nomenklatur SIPD", "Indikator", "Target/ Satuan",
+  "Output", "Kegiatan", "Nomenklatur SIPD", "Indikator", "Target/ Satuan",
+  "Output/ Input", "Anggaran",
+  "Sub Kegiatan", "Nomenklatur SIPD", "Indikator", "Target/ Satuan",
+];
+
+const RC_RED = "FFFF5050";
+const RC_BLUE = "FF5B9BD5";
+const RC_GREEN = "FF92D050";
+const RC_ORANGE = "FFFFC000";
+const RC_GRAY = "FFD8D8D8";
+const RC_YELLOW = "FFFFCC29";
+
+const RENSTRA_HEADER_COLORS = [
+  RC_RED, RC_RED, RC_RED, RC_RED,
+  RC_BLUE, RC_RED, RC_RED, RC_RED,
+  RC_GREEN, RC_BLUE, RC_BLUE, RC_BLUE, RC_BLUE,
+  RC_ORANGE, RC_GREEN, RC_GREEN, RC_GREEN, RC_GREEN,
+  RC_GRAY, RC_GRAY,
+  RC_YELLOW, RC_YELLOW, RC_YELLOW, RC_YELLOW,
+];
+
+const RENSTRA_DATA_NAME_COLORS = {
+  0: RC_RED,    // Ultimate Outcome
+  4: RC_BLUE,   // Intermediate Outcome
+  8: RC_GREEN,  // Immediate Outcome
+  13: RC_ORANGE, // Output
+};
+
+const RENSTRA_COL_WIDTHS = [
+  18, 14, 14, 18, 38, 30, 13, 18, 26, 21, 19, 18, 19, 27, 23, 21, 17, 18, 20, 17, 20, 19, 26, 17,
+];
+
+const RENSTRA_BORDER = {
+  top: { style: "thin", color: { rgb: "FF000000" } },
+  bottom: { style: "thin", color: { rgb: "FF000000" } },
+  left: { style: "thin", color: { rgb: "FF000000" } },
+  right: { style: "thin", color: { rgb: "FF000000" } },
+};
+
+function renstraHeaderStyle(bgColor) {
+  return {
+    fill: { patternType: "solid", fgColor: { rgb: bgColor } },
+    font: { bold: true, sz: 11, name: "Calibri", color: { rgb: "FF000000" } },
+    alignment: { horizontal: "center", vertical: "center", wrapText: true },
+    border: RENSTRA_BORDER,
+  };
+}
+
+function renstraDataStyle(bgColor) {
+  return {
+    fill: bgColor ? { patternType: "solid", fgColor: { rgb: bgColor } } : { patternType: "none" },
+    font: { sz: 11, name: "Calibri" },
+    alignment: { vertical: "top", wrapText: true },
+    border: RENSTRA_BORDER,
+  };
+}
+
+const RENSTRA_COL_KEYS = [
+  "ultimateOutcome", "tujuan", "indikatorUlt", "targetUlt",
+  "intermediateOutcome", "sasaran", "indikatorInt", "targetInt",
+  "immediateOutcome", "program", "nomenklaturImm", "indikatorImm", "targetImm",
+  "output", "kegiatan", "nomenklaturOut", "indikatorOut", "targetOut",
+  "outputInput", "anggaran",
+  "subKegiatan", "nomenklaturSub", "indikatorSub", "targetSub",
+];
+
+const ANGGARAN_COL_IDX = 19;
+
+export function exportRenstraExcel(renstraRows, year) {
+  const dataRows = renstraRows.map((row) =>
+    RENSTRA_COL_KEYS.map((key) => {
+      const v = row[key];
+      if (v === null || v === undefined || v === "") return "";
+      return v;
+    })
+  );
+
+  const sheetData = [RENSTRA_HEADER, ...dataRows];
+  const ws = XLSX.utils.aoa_to_sheet(sheetData);
+
+  for (let r = 0; r < sheetData.length; r++) {
+    for (let c = 0; c < RENSTRA_HEADER.length; c++) {
+      const ref = XLSX.utils.encode_cell({ r, c });
+      if (!ws[ref]) ws[ref] = { t: "s", v: "" };
+      ws[ref].s = r === 0
+        ? renstraHeaderStyle(RENSTRA_HEADER_COLORS[c])
+        : renstraDataStyle(RENSTRA_DATA_NAME_COLORS[c]);
+
+      // Kolom Anggaran: format angka
+      if (r > 0 && c === ANGGARAN_COL_IDX) {
+        ws[ref].s.numFmt = "#,##0";
+        if (typeof ws[ref].v === "number") ws[ref].t = "n";
+      }
+    }
+  }
+
+  ws["!cols"] = RENSTRA_COL_WIDTHS.map((wch) => ({ wch }));
+  ws["!rows"] = [{ hpt: 30 }];
+  ws["!freeze"] = { xSplit: 0, ySplit: 1 };
+
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, "CASECADING");
+  XLSX.writeFile(wb, `casecading-renstra-${year}.xlsx`);
 }
 
 /* =========================================================
@@ -666,18 +839,23 @@ const slug = (s) =>
     .replace(/(^-|-$)/g, "");
 
 export function exportReportExcel(report, meta) {
+  if (report.kategori === "renstra") {
+    exportRenstraExcel(report.data.rows, meta.tahun);
+    return;
+  }
   const wb = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb, sheetFromReport(report, meta), safeSheetName(report.sheetName || report.nama, new Set()));
   XLSX.writeFile(wb, `${slug(report.nama)}-${meta.tahun}.xlsx`);
 }
 
 export function exportAllExcel(reports, meta) {
-  const wb = XLSX.utils.book_new();
-  const used = new Set();
-  reports.forEach((report) => {
-    XLSX.utils.book_append_sheet(wb, sheetFromReport(report, meta), safeSheetName(report.sheetName || report.nama, used));
+  const targets = reports.filter((r) => r.data.total > 0);
+  const list = targets.length > 0 ? targets : reports;
+  list.forEach((report, idx) => {
+    setTimeout(() => {
+      exportReportExcel(report, meta);
+    }, idx * 250);
   });
-  XLSX.writeFile(wb, `laporan-e-sakip-${meta.tahun}.xlsx`);
 }
 
 /* =========================================================
@@ -690,6 +868,452 @@ const esc = (s) =>
     .replace(/</g, "&lt;")
     .replace(/>/g, "&gt;")
     .replace(/"/g, "&quot;");
+
+/* =========================================================
+   CETAK POHON KINERJA — FORMAT DIAGRAM POHON (TREE)
+   Identik dengan tampilan Export PDF di halaman Pohon Kinerja
+   (#performance-tree + TreeNode + TreeConnectors SVG + zoom 0.7).
+========================================================= */
+
+const PK_PALETTE = {
+  ULTIMATE:     { border: "#f87171", head: "#ef4444", label: "#ef4444" },
+  INTERMEDIATE: { border: "#60a5fa", head: "#2563eb", label: "#2563eb" },
+  IMMEDIATE:    { border: "#34d399", head: "#059669", label: "#059669" },
+  OUTPUT:       { border: "#fbbf24", head: "#f59e0b", label: "#d97706" },
+};
+
+function renderPkTreeNode(level, node, nodeId) {
+  const colors = PK_PALETTE[level] || PK_PALETTE.INTERMEDIATE;
+  const title =
+    level === "INTERMEDIATE"
+      ? node.sasaran || node.title || "-"
+      : node.title || "-";
+
+  const bidangLabel =
+    level === "INTERMEDIATE" && node.bidang
+      ? `Bidang ${BIDANG_LABEL[node.bidang] || node.bidang}`
+      : null;
+
+  const bidangHtml = bidangLabel
+    ? `<span class="pk-bidang">${esc(bidangLabel)}</span>`
+    : "";
+
+  let indicatorList = [];
+  if (level === "INTERMEDIATE" && Array.isArray(node.indicators)) {
+    indicatorList = node.indicators
+      .map((r) => String(typeof r === "object" ? r?.indicator ?? "" : r ?? "").trim())
+      .filter(Boolean);
+  }
+
+  let indicatorHtml;
+  if (level === "INTERMEDIATE" && indicatorList.length > 1) {
+    indicatorHtml = `<div class="pk-ind-list">${indicatorList
+      .map(
+        (ind, idx) =>
+          `<div class="pk-ind-row"><span class="pk-ind-num">${idx + 1}.</span><span class="pk-ind-txt">${esc(ind)}</span></div>`,
+      )
+      .join("")}</div>`;
+  } else {
+    const singleInd =
+      level === "INTERMEDIATE"
+        ? indicatorList[0] || node.indicator || "Belum ada indikator"
+        : node.indicator || "Belum ada indikator";
+    indicatorHtml = `<span class="pk-ind-single">${esc(singleInd)}</span>`;
+  }
+
+  return `<div data-node-id="${esc(nodeId)}" class="pk-node" style="border-color:${colors.border}">
+    <span class="pk-level" style="color:${colors.label}">${esc(level)}</span>
+    <span class="pk-head" style="background:${colors.head}">${esc(title)}</span>
+    ${bidangHtml}
+    ${indicatorHtml}
+  </div>`;
+}
+
+export function printPohonKinerjaTree(ultimates, meta) {
+  if (!ultimates || ultimates.length === 0) {
+    alert("Belum ada data Pohon Kinerja untuk dicetak.");
+    return;
+  }
+
+  const u = ultimates[0];
+  const ultimateId = `ultimate-${u.id || 1}`;
+  const intermediates = u.intermediates || [];
+  const edges = [];
+
+  const branchesHtml = intermediates
+    .map((it, itIdx) => {
+      const intId = `intermediate-${it.id || itIdx}`;
+      edges.push({ fromId: ultimateId, toId: intId, orthogonal: true, hasArrow: true });
+
+      const immediates = it.immediates || [];
+      const immediatesHtml =
+        immediates.length > 0
+          ? `<div class="pk-imm-row">${immediates
+              .map((im, imIdx) => {
+                const immId = `immediate-${im.id || `${itIdx}-${imIdx}`}`;
+                edges.push({ fromId: intId, toId: immId, orthogonal: true, hasArrow: true });
+
+                const outputs = im.outputs || [];
+                const outputsHtml =
+                  outputs.length > 0
+                    ? `<div class="pk-out-col">${outputs
+                        .map((o, oIdx) => {
+                          const outId = `output-${o.id || `${itIdx}-${imIdx}-${oIdx}`}`;
+                          edges.push({
+                            fromId: immId,
+                            toId: outId,
+                            orthogonal: false,
+                            hasArrow: true,
+                          });
+                          return `<div class="pk-out-item">${renderPkTreeNode("OUTPUT", o, outId)}</div>`;
+                        })
+                        .join("")}</div>`
+                    : "";
+
+                return `<div class="pk-imm-col">${renderPkTreeNode("IMMEDIATE", im, immId)}${outputsHtml}</div>`;
+              })
+              .join("")}</div>`
+          : "";
+
+      return `<div class="pk-branch-col">
+        <div style="height:20px;flex-shrink:0"></div>
+        ${renderPkTreeNode("INTERMEDIATE", it, intId)}
+        <div style="margin:20px 0;height:20px;flex-shrink:0"></div>
+        ${immediatesHtml}
+      </div>`;
+    })
+    .join("");
+
+  const html = `<!doctype html>
+<html lang="id"><head><meta charset="utf-8" />
+<title>Pohon Kinerja ${esc(meta.tahun)}</title>
+<style>
+  @page { size: landscape; margin: 8mm; }
+  * { box-sizing: border-box; -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; }
+  body {
+    margin: 0;
+    padding: 0;
+    background: #f7fbff;
+    color: #0b1c30;
+    font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif;
+  }
+  #performance-tree {
+    width: 100%;
+    overflow: visible;
+    background: #f7fbff;
+  }
+  #tree-zoom-target {
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    width: max-content;
+    min-width: 0;
+    padding: 32px 32px 80px 32px;
+  }
+  .pk-banner {
+    position: relative;
+    margin: 0 auto 32px auto;
+    display: flex;
+    width: 288px;
+    flex-direction: column;
+    align-items: center;
+    border-radius: 8px;
+    border: 2px solid #34d399;
+    background: #ffffff;
+    padding: 16px;
+    text-align: center;
+    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05);
+  }
+  .pk-banner-title {
+    margin-bottom: 4px;
+    font-weight: 700;
+    font-size: 16px;
+    color: #059669;
+  }
+  .pk-banner-unit {
+    font-size: 12px;
+    font-weight: 700;
+    color: #0b1c30;
+  }
+  .pk-banner-year {
+    font-size: 12px;
+    color: #64748b;
+    margin-top: 2px;
+  }
+  .pk-ult-wrap {
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+  }
+  .pk-branches-row {
+    position: relative;
+    display: flex;
+    justify-content: center;
+    gap: 32px;
+    padding-top: 20px;
+  }
+  .pk-branch-col {
+    position: relative;
+    display: flex;
+    flex-shrink: 0;
+    flex-direction: column;
+    align-items: center;
+  }
+  .pk-imm-row {
+    position: relative;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: flex-start;
+    justify-content: center;
+    gap: 24px;
+  }
+  .pk-imm-col {
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+  }
+  .pk-out-col {
+    margin-top: 20px;
+    padding-top: 20px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 20px;
+  }
+  .pk-out-item {
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+  }
+  .pk-node {
+    position: relative;
+    display: flex;
+    width: 250px;
+    flex-direction: column;
+    overflow: visible;
+    border-radius: 8px;
+    border: 2px solid #60a5fa;
+    background: #ffffff;
+    text-align: center;
+    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05);
+  }
+  .pk-level {
+    position: absolute;
+    left: -28px;
+    top: 50%;
+    transform: translateY(-50%) rotate(180deg);
+    writing-mode: vertical-rl;
+    white-space: nowrap;
+    font-size: 9px;
+    font-weight: 700;
+    line-height: 1;
+    letter-spacing: 0.14em;
+  }
+  .pk-head {
+    min-height: 48px;
+    padding: 8px 12px;
+    font-size: 10px;
+    font-weight: 800;
+    line-height: 1.25;
+    color: #ffffff;
+    border-top-left-radius: 5px;
+    border-top-right-radius: 5px;
+  }
+  .pk-bidang {
+    border-top: 1px solid #dbeafe;
+    background: rgba(239, 246, 255, 0.9);
+    padding: 4px 8px;
+    font-size: 9px;
+    font-weight: 700;
+    color: #1e40af;
+  }
+  .pk-ind-single {
+    min-height: 37px;
+    border-top: 1px solid #e2e8f0;
+    padding: 8px 12px;
+    font-size: 10px;
+    line-height: 1.25;
+    color: #475569;
+    white-space: pre-line;
+    text-align: center;
+  }
+  .pk-ind-list {
+    min-height: 37px;
+    border-top: 1px solid #e2e8f0;
+    padding: 8px 12px;
+    font-size: 10px;
+    line-height: 1.25;
+    color: #475569;
+    text-align: left;
+  }
+  .pk-ind-row {
+    display: flex;
+    align-items: flex-start;
+    gap: 4px;
+  }
+  .pk-ind-row + .pk-ind-row {
+    margin-top: 4px;
+  }
+  .pk-ind-num {
+    font-weight: 700;
+    color: #1d4ed8;
+    flex-shrink: 0;
+  }
+  .pk-ind-txt {
+    word-break: break-word;
+  }
+  #pk-svg {
+    pointer-events: none;
+    position: absolute;
+    left: 0;
+    top: 0;
+    width: 100%;
+    height: 100%;
+    overflow: visible;
+  }
+  @media print {
+    body { background: #ffffff; overflow: visible !important; }
+    #performance-tree { background: #ffffff; }
+    #tree-zoom-target {
+      width: max-content !important;
+      min-width: 0 !important;
+      zoom: 0.7;
+      transform-origin: top left;
+    }
+  }
+</style>
+</head>
+<body>
+  <div id="performance-tree">
+    <div id="tree-zoom-target">
+      <svg id="pk-svg">
+        <defs>
+          <marker id="tree-arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+            <path d="M0,0 L10,5 L0,10 z" fill="#94a3b8" />
+          </marker>
+        </defs>
+      </svg>
+
+      <div class="pk-banner">
+        <div class="pk-banner-title">POHON KINERJA</div>
+        <div class="pk-banner-unit">${esc((meta.unitKerja || "DINAS KOMUNIKASI DAN INFORMATIKA").toUpperCase())}</div>
+        <div class="pk-banner-year">TAHUN ${esc(meta.tahun)}</div>
+      </div>
+
+      <div class="pk-ult-wrap">
+        ${renderPkTreeNode("ULTIMATE", u, ultimateId)}
+        <div style="height:32px"></div>
+      </div>
+
+      <div class="pk-branches-row">
+        ${branchesHtml}
+      </div>
+    </div>
+  </div>
+
+  <script>
+    (function () {
+      var edges = ${JSON.stringify(edges)};
+      function getRelRect(el, container) {
+        var x = 0;
+        var y = 0;
+        var cur = el;
+        while (cur && cur !== container) {
+          x += cur.offsetLeft;
+          y += cur.offsetTop;
+          cur = cur.offsetParent;
+        }
+        return {
+          left: x,
+          top: y,
+          width: el.offsetWidth,
+          height: el.offsetHeight,
+          bottom: y + el.offsetHeight,
+        };
+      }
+
+      function drawConnectors() {
+        var container = document.getElementById("tree-zoom-target");
+        var svg = document.getElementById("pk-svg");
+        if (!container || !svg) return;
+        var w = container.offsetWidth || container.scrollWidth;
+        var h = container.offsetHeight || container.scrollHeight;
+        svg.setAttribute("viewBox", "0 0 " + w + " " + h);
+        svg.setAttribute("preserveAspectRatio", "none");
+
+        var oldLines = svg.querySelectorAll(".pk-edge");
+        oldLines.forEach(function (el) { el.remove(); });
+
+        var ns = "http://www.w3.org/2000/svg";
+        edges.forEach(function (edge) {
+          var a = container.querySelector('[data-node-id="' + edge.fromId + '"]');
+          var b = container.querySelector('[data-node-id="' + edge.toId + '"]');
+          if (!a || !b) return;
+          var rectA = getRelRect(a, container);
+          var rectB = getRelRect(b, container);
+          var x1 = rectA.left + rectA.width / 2;
+          var y1 = rectA.bottom;
+          var x2 = rectB.left + rectB.width / 2;
+          var y2 = rectB.top;
+
+          if (edge.orthogonal) {
+            var midY = (y1 + y2) / 2;
+            var path = document.createElementNS(ns, "path");
+            path.setAttribute("class", "pk-edge");
+            path.setAttribute("d", "M " + x1 + " " + y1 + " L " + x1 + " " + midY + " L " + x2 + " " + midY + " L " + x2 + " " + y2);
+            path.setAttribute("fill", "none");
+            path.setAttribute("stroke", "#94a3b8");
+            path.setAttribute("stroke-width", "1.5");
+            if (edge.hasArrow !== false) path.setAttribute("marker-end", "url(#tree-arrow)");
+            svg.appendChild(path);
+          } else {
+            var line = document.createElementNS(ns, "line");
+            line.setAttribute("class", "pk-edge");
+            line.setAttribute("x1", x1);
+            line.setAttribute("y1", y1);
+            line.setAttribute("x2", x2);
+            line.setAttribute("y2", y2);
+            line.setAttribute("stroke", "#94a3b8");
+            line.setAttribute("stroke-width", "1.5");
+            if (edge.hasArrow !== false) line.setAttribute("marker-end", "url(#tree-arrow)");
+            svg.appendChild(line);
+          }
+        });
+      }
+
+      window.addEventListener("resize", drawConnectors);
+      window.addEventListener("beforeprint", drawConnectors);
+      if (typeof ResizeObserver !== "undefined") {
+        var ro = new ResizeObserver(drawConnectors);
+        var target = document.getElementById("tree-zoom-target");
+        if (target) ro.observe(target);
+      }
+
+      window.onload = function () {
+        drawConnectors();
+        setTimeout(function () {
+          drawConnectors();
+          window.focus();
+          window.print();
+        }, 100);
+      };
+    })();
+  </script>
+</body></html>`;
+
+  const win = window.open("", "_blank", "width=1400,height=900");
+  if (!win) {
+    alert("Pop-up diblokir browser. Izinkan pop-up untuk mencetak laporan.");
+    return;
+  }
+  win.document.open();
+  win.document.write(html);
+  win.document.close();
+}
 
 export function printReport(report, meta) {
   const { columns, rows, footer } = report.data;

@@ -1161,6 +1161,38 @@ function PohonRenstra() {
   // "Sedang mencari data...", bukan langsung "Belum ada data".
   const [loadingData, setLoadingData] = useState(true);
 
+  // Fetch available years on component load
+  useEffect(() => {
+    const fetchYears = async () => {
+      setLoadingYears(true);
+      try {
+        const response = await fetch(`${API_BASE_URL}/renstra/years`, {
+          method: "GET",
+          headers: getAuthHeaders(),
+        });
+
+        const data = await response.json();
+
+        if (response.ok) {
+          setAvailableYears(data.data || []);
+          // Set default year ke tahun aktif dari Pohon Kinerja
+          const defaultYear = data.active_year ?? data.data?.[0];
+          if (defaultYear) {
+            setYear(String(defaultYear));
+          }
+        } else {
+          console.error("Gagal mengambil daftar tahun:", data.message);
+        }
+      } catch (err) {
+        console.error("Failed to fetch years:", err);
+      } finally {
+        setLoadingYears(false);
+      }
+    };
+
+    fetchYears();
+  }, []);
+
   useEffect(() => {
     // Belum ada tahun yang dipilih: tidak ada yang dicari.
     if (!year) {

@@ -382,7 +382,7 @@ function EditablePohonKinerja() {
   const [loadingArchivedView, setLoadingArchivedView] = useState(false);
 
   // Filter states
-  const [tahun, setTahun] = useState("2026");
+  const [tahun, setTahun] = useState("");
   const [unitKerja, setUnitKerja] = useState("");
   
   // Data states
@@ -447,9 +447,12 @@ function EditablePohonKinerja() {
 
         if (response.ok) {
           setAvailableYears(data.data || []);
-          // Set default tahun to first available year if available
-          if (data.data && data.data.length > 0 && !tahun) {
-            setTahun(String(data.data[0]));
+          // Set default tahun ke tahun aktif dari Pohon Kinerja
+          const defaultYear = data.active_year ?? data.data?.[0];
+          if (defaultYear && !tahun) {
+            setTahun(String(defaultYear));
+          } else if (!tahun) {
+            setTahun(String(new Date().getFullYear()));
           }
         }
       } catch (err) {
@@ -1599,22 +1602,9 @@ function EditablePohonKinerja() {
 
             {selected.level === "INTERMEDIATE" ? (
               <div className="flex flex-col gap-2">
-                <div className="flex items-center justify-between">
-                  <span className="text-xs font-semibold uppercase tracking-wider text-slate-500">
-                    Indikator ({editForm.indicators?.length || 1})
-                  </span>
-                  {!isArchivedView && isAdmin && (
-                    <button
-                      type="button"
-                      onClick={handleAddIndicatorField}
-                      disabled={savingNode || deletingNode}
-                      className="inline-flex items-center gap-1 rounded bg-blue-50 px-2.5 py-1 text-xs font-semibold text-blue-900 hover:bg-blue-100 transition border border-blue-200"
-                    >
-                      <span className="material-symbols-outlined text-[15px]">add</span>
-                      Tambah Indikator
-                    </button>
-                  )}
-                </div>
+                <span className="text-xs font-semibold uppercase tracking-wider text-slate-500">
+                  Indikator ({editForm.indicators?.length || 1})
+                </span>
 
                 <div className="space-y-2 max-h-60 overflow-y-auto pr-1">
                   {(editForm.indicators || [""]).map((ind, idx) => (
@@ -1657,7 +1647,7 @@ function EditablePohonKinerja() {
                     className="flex w-full items-center justify-center gap-1.5 rounded-lg border-2 border-dashed border-blue-200 bg-blue-50/40 py-2 text-xs font-semibold text-blue-800 hover:border-blue-300 hover:bg-blue-50 transition"
                   >
                     <span className="material-symbols-outlined text-[16px]">add_circle</span>
-                    Tambah Kolom Indikator
+                    Tambah Indikator
                   </button>
                 )}
               </div>
@@ -1780,20 +1770,9 @@ function EditablePohonKinerja() {
             </label>
 
             <div className="flex flex-col gap-2">
-              <div className="flex items-center justify-between">
-                <span className="text-xs font-semibold uppercase tracking-wider text-slate-500">
-                  Indikator Sasaran ({newIntermediateForm.indicators?.length || 1})
-                </span>
-                <button
-                  type="button"
-                  onClick={handleAddNewIntermediateIndicatorField}
-                  disabled={addingIntermediate}
-                  className="inline-flex items-center gap-1 rounded bg-blue-50 px-2.5 py-1 text-xs font-semibold text-blue-900 hover:bg-blue-100 transition border border-blue-200"
-                >
-                  <span className="material-symbols-outlined text-[15px]">add</span>
-                  Tambah Indikator
-                </button>
-              </div>
+              <span className="text-xs font-semibold uppercase tracking-wider text-slate-500">
+                Indikator Sasaran ({newIntermediateForm.indicators?.length || 1})
+              </span>
 
               <div className="space-y-2 max-h-60 overflow-y-auto pr-1">
                 {(newIntermediateForm.indicators || [""]).map((ind, idx) => (
@@ -1836,7 +1815,7 @@ function EditablePohonKinerja() {
                 className="flex w-full items-center justify-center gap-1.5 rounded-lg border-2 border-dashed border-blue-200 bg-blue-50/40 py-2 text-xs font-semibold text-blue-800 hover:border-blue-300 hover:bg-blue-50 transition"
               >
                 <span className="material-symbols-outlined text-[16px]">add_circle</span>
-                Tambah Kolom Indikator
+                Tambah Indikator
               </button>
             </div>
           </div>

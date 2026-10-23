@@ -14,8 +14,10 @@ import {
   computeSpans,
   exportAllExcel,
   exportReportExcel,
+  exportRenstraExcel,
   formatCell,
   hitungStatus,
+  printPohonKinerjaTree,
   printReport,
 } from "../utils/laporanBuilder";
 
@@ -60,8 +62,8 @@ export default function Laporan() {
   const { user } = useAuth();
   const currentYear = new Date().getFullYear();
 
-  const [tahun, setTahun] = useState(currentYear);
-  const [availableYears, setAvailableYears] = useState([currentYear]);
+  const [tahun, setTahun] = useState(null);
+  const [availableYears, setAvailableYears] = useState([]);
   const [kategori, setKategori] = useState("semua");
   const [periode, setPeriode] = useState("semua");
   const [search, setSearch] = useState("");
@@ -78,7 +80,7 @@ export default function Laporan() {
 
   const [preview, setPreview] = useState(null);
 
-  // Ambil daftar tahun yang tersedia
+  // Ambil daftar tahun yang tersedia & pilih tahun aktif dari Pohon Kinerja
   useEffect(() => {
     api
       .get("/pohon-kinerja/years")
@@ -86,15 +88,23 @@ export default function Laporan() {
         const years = (resp.data?.data || []).map(Number);
         if (years.length > 0) {
           setAvailableYears(years);
-          if (!years.includes(Number(tahun))) setTahun(years[0]);
+          const activeYear = Number(resp.data?.active_year) || years[0];
+          setTahun(activeYear);
+        } else {
+          setAvailableYears([currentYear]);
+          setTahun(currentYear);
         }
       })
-      .catch(() => {});
+      .catch(() => {
+        setAvailableYears([currentYear]);
+        setTahun(currentYear);
+      });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // Ambil seluruh data sumber laporan untuk tahun terpilih
   const fetchData = useCallback(async () => {
+    if (!tahun) return;
     setLoading(true);
     setError(null);
 
@@ -154,7 +164,7 @@ export default function Laporan() {
       periodeLabel: "Tahunan",
       icon: "account_tree",
       sheetName: "Pohon Kinerja",
-      data: pohon,
+      data: { ...pohon, _ultimates: source.ultimates },
       status: hitungStatus(pohon.filled, pohon.total, "master"),
     });
 
@@ -318,7 +328,7 @@ export default function Laporan() {
             <span className="material-symbols-outlined text-slate-500 text-lg">calendar_today</span>
             <span className="text-xs font-semibold text-slate-500 uppercase">Tahun:</span>
             <select
-              value={tahun}
+              value={tahun ?? ""}
               onChange={(e) => setTahun(Number(e.target.value))}
               className="bg-transparent text-sm font-bold text-[#001e40] focus:outline-none cursor-pointer"
             >
@@ -339,10 +349,10 @@ export default function Laporan() {
           </button>
 
           <button
-            onClick={() => exportAllExcel(reports, meta)}
+            onClick={() => exportAllExcel(filteredReports.length > 0 ? filteredReports : reports, meta)}
             disabled={loading || !hasAnyData}
             className="flex items-center gap-1.5 px-4 py-2 bg-[#001e40] hover:bg-[#002f66] disabled:opacity-50 disabled:cursor-not-allowed text-white text-sm font-semibold rounded-xl shadow-sm transition-all"
-            title="Unduh seluruh laporan dalam satu file Excel (satu sheet per laporan)"
+            title="Unduh seluruh file Excel laporan sekaligus"
           >
             <span className="material-symbols-outlined text-lg">download</span>
             Unduh Semua (Excel)
@@ -518,14 +528,22 @@ export default function Laporan() {
                               title="Cetak / simpan PDF"
                               tone="slate"
                               disabled={noData}
-                              onClick={() => printReport(r, meta)}
+                              onClick={() =>
+                                r.kategori === "pohon"
+                                  ? printPohonKinerjaTree(r.data._ultimates, meta)
+                                  : printReport(r, meta)
+                              }
                             />
                             <IconButton
                               icon="table_view"
                               title="Unduh Excel"
                               tone="green"
                               disabled={noData}
-                              onClick={() => exportReportExcel(r, meta)}
+                              onClick={() =>
+                                r.kategori === "renstra"
+                                  ? exportRenstraExcel(r.data.rows, meta.tahun)
+                                  : exportReportExcel(r, meta)
+                              }
                             />
                           </div>
                         </td>
@@ -640,7 +658,11 @@ function PreviewModal({ report, meta, onClose }) {
           </div>
           <div className="flex items-center gap-2 shrink-0">
             <button
-              onClick={() => printReport(report, meta)}
+              onClick={() =>
+                report.kategori === "pohon"
+                  ? printPohonKinerjaTree(report.data._ultimates, meta)
+                  : printReport(report, meta)
+              }
               disabled={noData}
               className="flex items-center gap-1.5 px-3 py-2 bg-white/10 hover:bg-white/20 disabled:opacity-40 rounded-lg text-xs font-semibold"
             >
@@ -648,7 +670,11 @@ function PreviewModal({ report, meta, onClose }) {
               Cetak / PDF
             </button>
             <button
-              onClick={() => exportReportExcel(report, meta)}
+              onClick={() =>
+                report.kategori === "renstra"
+                  ? exportRenstraExcel(report.data.rows, meta.tahun)
+                  : exportReportExcel(report, meta)
+              }
               disabled={noData}
               className="flex items-center gap-1.5 px-3 py-2 bg-emerald-500 hover:bg-emerald-600 disabled:opacity-40 rounded-lg text-xs font-semibold"
             >
