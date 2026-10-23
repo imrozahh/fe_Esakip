@@ -530,8 +530,8 @@ export function buildCapaianTahunan(items = []) {
 
 const realisasiBaseColumns = [
   { key: "no", label: "No", align: "center", width: 5 },
-  { key: "subKegiatan", label: "Sub Kegiatan", width: 36 },
   { key: "kegiatan", label: "Kegiatan", width: 32 },
+  { key: "subKegiatan", label: "Sub Kegiatan", width: 36 },
   { key: "bidang", label: "Bidang", width: 15, align: "center" },
   { key: "pagu", label: "Pagu Anggaran (Rp)", width: 20, align: "right", type: "currency" },
 ];
