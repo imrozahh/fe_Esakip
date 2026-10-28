@@ -13,23 +13,6 @@ const AUTO_REFRESH_INTERVAL_MS = 20000;
 const TREE_MIN_SCALE = 0.55;
 
 /* =========================================================
-   HELPER: hitung milidetik sampai tengah malam berikutnya
-========================================================= */
-
-function millisUntilNextMidnight() {
-  const now = new Date();
-  const nextMidnight = new Date(
-    now.getFullYear(),
-    now.getMonth(),
-    now.getDate() + 1,
-    0,
-    0,
-    5 // buffer 5 detik biar aman lewat tengah malam
-  );
-  return nextMidnight.getTime() - now.getTime();
-}
-
-/* =========================================================
    HELPER: format waktu relatif ("2 jam yang lalu", dst)
 ========================================================= */
 
@@ -66,50 +49,71 @@ const LEVEL_META = {
 };
 
 export default function Dashboard() {
-  const [search, setSearch] = useState("");
-
   /* =======================================================
-     TAHUN AKTIF — otomatis dihitung ulang tiap tengah malam
+     TAHUN — ngikut data Pohon Kinerja (bukan tahun sistem).
+     - years       : semua tahun yang ada di Pohon Kinerja
+                     (termasuk yang sudah diarsipkan)
+     - activeYear  : tahun yang sedang dilihat. Awalnya = tahun
+                     aktif dari Pohon Kinerja, lalu bisa diganti
+                     lewat dropdown.
   ======================================================= */
 
-  const [activeYear, setActiveYear] = useState(() => new Date().getFullYear());
-  const midnightTimerRef = useRef(null);
+  const [years, setYears] = useState([]);
+  const [activeYear, setActiveYear] = useState("");
+  const [yearsLoading, setYearsLoading] = useState(true);
 
   useEffect(() => {
-    fetch(`${API_BASE_URL}/api/pohon-kinerja/years`)
-      .then((res) => (res.ok ? res.json() : null))
-      .then((json) => {
-        const yr = Number(json?.active_year) || Number(json?.data?.[0]);
-        if (yr) setActiveYear(yr);
-      })
-      .catch(() => {});
+    let cancelled = false;
 
-    function scheduleMidnightCheck() {
-      midnightTimerRef.current = setTimeout(() => {
-        setActiveYear(new Date().getFullYear());
-        scheduleMidnightCheck(); // jadwalkan lagi buat tengah malam berikutnya
-      }, millisUntilNextMidnight());
+    async function fetchYears() {
+      try {
+        const response = await fetch(`${API_BASE_URL}/api/pohon-kinerja/years`);
+        if (!response.ok) return;
+
+        const json = await response.json();
+        if (cancelled) return;
+
+        const list = (json?.data ?? []).map(String);
+        setYears(list);
+
+        const active = json?.active_year ? String(json.active_year) : list[0] || "";
+
+        // Hanya mengisi saat belum ada pilihan, supaya pilihan pengguna
+        // tidak ditimpa waktu daftar tahun di-refresh.
+        setActiveYear((previous) => previous || active);
+      } catch (error) {
+        if (!cancelled) console.error("Gagal mengambil daftar tahun:", error);
+      } finally {
+        if (!cancelled) setYearsLoading(false);
+      }
     }
 
-    scheduleMidnightCheck();
+    fetchYears();
+
+    // Daftar tahun ikut di-refresh, jadi tahun baru dari Pohon Kinerja
+    // (misal 2027) otomatis muncul di dropdown.
+    const intervalId = setInterval(fetchYears, AUTO_REFRESH_INTERVAL_MS);
 
     return () => {
-      if (midnightTimerRef.current) {
-        clearTimeout(midnightTimerRef.current);
-      }
+      cancelled = true;
+      clearInterval(intervalId);
     };
   }, []);
 
   /* =======================================================
-     RINGKASAN POHON KINERJA — ambil dari backend, ikut
-     activeYear. Refetch otomatis begitu activeYear berubah
-     (termasuk saat tengah malam ganti tahun).
+     RINGKASAN POHON KINERJA — ikut activeYear.
   ======================================================= */
 
   const [summary, setSummary] = useState(null);
   const [summaryStatus, setSummaryStatus] = useState("loading"); // loading | success | error
 
   useEffect(() => {
+    if (!activeYear) {
+      setSummary(null);
+      setSummaryStatus(yearsLoading ? "loading" : "success");
+      return;
+    }
+
     let cancelled = false;
 
     async function fetchSummary() {
@@ -145,17 +149,22 @@ export default function Dashboard() {
       cancelled = true;
       clearInterval(intervalId);
     };
-  }, [activeYear]);
+  }, [activeYear, yearsLoading]);
 
   /* =======================================================
-     DIAGRAM POHON KINERJA — struktur tree ringkas, ikut
-     activeYear, auto-refresh sama seperti bagian lain.
+     DIAGRAM POHON KINERJA — ikut activeYear.
   ======================================================= */
 
   const [tree, setTree] = useState(null);
   const [treeStatus, setTreeStatus] = useState("loading"); // loading | success | empty | error
 
   useEffect(() => {
+    if (!activeYear) {
+      setTree(null);
+      setTreeStatus(yearsLoading ? "loading" : "empty");
+      return;
+    }
+
     let cancelled = false;
 
     async function fetchTree() {
@@ -199,17 +208,22 @@ export default function Dashboard() {
       cancelled = true;
       clearInterval(intervalId);
     };
-  }, [activeYear]);
+  }, [activeYear, yearsLoading]);
 
   /* =======================================================
-     AKTIVITAS TERBARU — node yang paling baru diubah,
-     ikut activeYear juga, auto-refresh sama seperti summary.
+     AKTIVITAS TERBARU — ikut activeYear.
   ======================================================= */
 
   const [activities, setActivities] = useState([]);
   const [activitiesStatus, setActivitiesStatus] = useState("loading");
 
   useEffect(() => {
+    if (!activeYear) {
+      setActivities([]);
+      setActivitiesStatus(yearsLoading ? "loading" : "success");
+      return;
+    }
+
     let cancelled = false;
 
     async function fetchActivities() {
@@ -245,7 +259,7 @@ export default function Dashboard() {
       cancelled = true;
       clearInterval(intervalId);
     };
-  }, [activeYear]);
+  }, [activeYear, yearsLoading]);
 
   /* =======================================================
      DIAGRAM MUAT PENUH — kalau pohon lebih lebar dari kartunya,
@@ -358,13 +372,34 @@ export default function Dashboard() {
 
         {/* ================= STATISTICS ================= */}
         <section>
-          <div className="flex items-center justify-between mb-3">
-            <p className="text-sm text-[#43474F]">
-              Pohon Kinerja tahun{" "}
-              <span className="font-semibold text-[#001E40]">
-                {activeYear}
-              </span>
-            </p>
+          <div className="flex flex-wrap items-center justify-between gap-3 mb-3">
+            <div className="flex items-center gap-2">
+              <label
+                htmlFor="dashboard-year"
+                className="text-sm text-[#43474F]"
+              >
+                Pohon Kinerja tahun
+              </label>
+
+              <select
+                id="dashboard-year"
+                value={activeYear}
+                onChange={(event) => setActiveYear(event.target.value)}
+                disabled={years.length === 0}
+                className="rounded-md border border-[#C3C6D1] bg-white px-2 py-1 text-sm font-semibold text-[#001E40] outline-none focus:border-[#001E40] disabled:cursor-not-allowed disabled:bg-[#EFF4FF] disabled:text-[#737780]"
+              >
+                {years.length === 0 && (
+                  <option value="">
+                    {yearsLoading ? "Memuat..." : "Belum ada tahun"}
+                  </option>
+                )}
+                {years.map((yr) => (
+                  <option key={yr} value={yr}>
+                    {yr}
+                  </option>
+                ))}
+              </select>
+            </div>
 
             {summaryStatus === "error" && (
               <p className="text-xs text-[#93000A]">
@@ -409,7 +444,7 @@ export default function Dashboard() {
                   Diagram Pohon Kinerja
                 </h2>
                 <p className="text-xs text-[#737780] mt-0.5">
-                  Struktur cascading tahun {activeYear}
+                  Struktur cascading tahun {activeYear || "-"}
                 </p>
               </div>
             </div>
@@ -429,7 +464,8 @@ export default function Dashboard() {
 
               {treeStatus === "empty" && (
                 <p className="text-sm text-[#737780] text-center py-10">
-                  Belum ada data pohon kinerja untuk tahun {activeYear}.
+                  Belum ada data pohon kinerja
+                  {activeYear ? ` untuk tahun ${activeYear}` : ""}.
                 </p>
               )}
 
@@ -573,7 +609,8 @@ export default function Dashboard() {
 
                 {activitiesStatus === "success" && activities.length === 0 && (
                   <p className="text-sm text-[#737780] text-center py-4">
-                    Belum ada aktivitas untuk tahun {activeYear}.
+                    Belum ada aktivitas
+                    {activeYear ? ` untuk tahun ${activeYear}` : ""}.
                   </p>
                 )}
 
