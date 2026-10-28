@@ -8,28 +8,6 @@ import { Download, Pencil } from "lucide-react";
 
 const API_BASE_URL = "http://127.0.0.1:8000/api";
 
-/* =========================================================
-   FILTER TAHUN
-   Daftar tahun tetap (tidak bergantung ada-tidaknya data), supaya data
-   tahun-tahun berikutnya (2027, 2028, ...) otomatis bisa dibuka dan
-   diedit begitu sudah ada. Ganti dua angka ini kalau periodenya berubah.
-========================================================= */
-
-const YEAR_RANGE_START = 2026;
-const YEAR_RANGE_END = 2030;
-
-const YEAR_OPTIONS = Array.from(
-  { length: YEAR_RANGE_END - YEAR_RANGE_START + 1 },
-  (_, index) => YEAR_RANGE_START + index
-);
-
-// Yang tampil pertama kali = tahun berjalan. Kalau tahun berjalan di luar
-// rentang (misalnya sudah 2031), pakai ujung rentang yang terdekat.
-function getDefaultYear() {
-  const currentYear = new Date().getFullYear();
-  return String(Math.min(Math.max(currentYear, YEAR_RANGE_START), YEAR_RANGE_END));
-}
-
 // Slug URL yang dipakai backend Laravel: /api/renstra/nodes/{slug}/{id}
 const LEVEL_TO_SLUG = {
   "ULTIMATE OUTCOME": "ultimate",
@@ -40,10 +18,8 @@ const LEVEL_TO_SLUG = {
 
 /* =========================================================
    AUTH HELPER
-   Semua route /renstra* sekarang di dalam auth:sanctum, jadi
+   Semua route /renstra* ada di dalam auth:sanctum, jadi
    SETIAP request ke situ wajib bawa header Authorization.
-   Tanpa ini, backend balikin 401 "Unauthenticated." — ini
-   penyebab dropdown tahun & tabel sempat kosong sebelumnya.
 ========================================================= */
 
 function getAuthHeaders(extraHeaders = {}) {
@@ -191,7 +167,7 @@ const COLOR_ORANGE = "FFFFC000";
 const COLOR_GRAY = "FFD8D8D8";
 const COLOR_YELLOW = "FFFFCC29";
 
-// Warna header per kolom (index 0 = kolom A ... index 22 = kolom W).
+// Warna header per kolom (index 0 = kolom A ... index 23 = kolom X).
 const HEADER_COLORS = [
   COLOR_RED, COLOR_RED, COLOR_RED, COLOR_RED, // Ultimate Outcome, Tujuan, Indikator, Target
   COLOR_BLUE, COLOR_RED, COLOR_RED, COLOR_RED, // Intermediate Outcome, Sasaran, Indikator, Target
@@ -1151,7 +1127,12 @@ function RenstraTable({ data, archived, loading, onDetail }) {
 
 function PohonRenstra() {
   const [data, setData] = useState([]);
-  const [year, setYear] = useState(getDefaultYear);
+
+  // Daftar tahun diambil dari data Pohon Kinerja (bukan tahun sistem / rentang tetap).
+  const [years, setYears] = useState([]);
+  const [year, setYear] = useState("");
+  const [loadingYears, setLoadingYears] = useState(true);
+
   const [detail, setDetail] = useState(null);
   const [editData, setEditData] = useState(null);
   const [saving, setSaving] = useState(false);
@@ -1161,37 +1142,46 @@ function PohonRenstra() {
   // "Sedang mencari data...", bukan langsung "Belum ada data".
   const [loadingData, setLoadingData] = useState(true);
 
-  // Fetch available years on component load
+  /* =======================================================
+     AMBIL DAFTAR TAHUN DARI POHON KINERJA
+  ======================================================= */
+
   useEffect(() => {
+    let cancelled = false;
+
     const fetchYears = async () => {
-      setLoadingYears(true);
       try {
         const response = await fetch(`${API_BASE_URL}/renstra/years`, {
-          method: "GET",
           headers: getAuthHeaders(),
         });
 
-        const data = await response.json();
+        const result = await response.json();
 
-        if (response.ok) {
-          setAvailableYears(data.data || []);
-          // Set default year ke tahun aktif dari Pohon Kinerja
-          const defaultYear = data.active_year ?? data.data?.[0];
-          if (defaultYear) {
-            setYear(String(defaultYear));
-          }
-        } else {
-          console.error("Gagal mengambil daftar tahun:", data.message);
-        }
-      } catch (err) {
-        console.error("Failed to fetch years:", err);
+        if (cancelled || !response.ok) return;
+
+        const list = (result.data || []).map(String);
+        setYears(list);
+
+        // Default: tahun aktif terbaru di Pohon Kinerja (bukan tahun sistem).
+        const active = result.active_year ? String(result.active_year) : list[0] || "";
+        setYear(active);
+      } catch (error) {
+        if (!cancelled) console.error("Gagal mengambil daftar tahun:", error);
       } finally {
-        setLoadingYears(false);
+        if (!cancelled) setLoadingYears(false);
       }
     };
 
     fetchYears();
+
+    return () => {
+      cancelled = true;
+    };
   }, []);
+
+  /* =======================================================
+     AMBIL DATA RENSTRA UNTUK TAHUN TERPILIH
+  ======================================================= */
 
   useEffect(() => {
     // Belum ada tahun yang dipilih: tidak ada yang dicari.
@@ -1220,21 +1210,15 @@ function PohonRenstra() {
 
         if (cancelled) return;
 
-        // Tahun ini sudah diarsipkan — backend balikin status 200
-        // dengan flag archived: true dan data kosong.
-        if (result.archived) {
-          setIsArchived(true);
-          setData([]);
-          return;
-        }
-
-        setIsArchived(false);
-
         if (!response.ok) {
           console.error("Gagal mengambil data Renstra:", result.message);
+          setIsArchived(false);
           setData([]);
           return;
         }
+
+        // Data arsip tetap ditampilkan; flag ini hanya untuk catatan di atas tabel.
+        setIsArchived((result.data || []).some((pohon) => pohon.isArchived));
 
         const formattedData = result.data.flatMap((pohon) =>
           pohon.ultimates.map((ultimate) => ({
@@ -1272,11 +1256,11 @@ function PohonRenstra() {
   }, [year]);
 
   const filteredData = useMemo(() => {
-    return data.filter((item) => item.year === year);
+    return data.filter((item) => String(item.year) === String(year));
   }, [data, year]);
 
-  // True selama data Renstra untuk tahun terpilih masih diambil dari server.
-  const isLoading = loadingData;
+  // True selama daftar tahun atau data Renstra masih diambil dari server.
+  const isLoading = loadingYears || loadingData;
 
   /* =======================================================
      DETAIL
@@ -1391,6 +1375,8 @@ function PohonRenstra() {
 
     try {
       let ok = true;
+      // Pesan dari server (misalnya "sudah diarsipkan") ditampilkan apa adanya ke pengguna.
+      let serverMessage = "";
 
       if (level === "OUTPUT") {
         const [outputRes, subRes] = await Promise.all([
@@ -1423,6 +1409,7 @@ function PohonRenstra() {
         if (!ok) {
           const failed = !outputRes.ok ? outputRes : subRes;
           const errJson = await failed.json().catch(() => ({}));
+          serverMessage = errJson.message || "";
           console.error("Gagal menyimpan Output/Sub Kegiatan:", errJson.message);
         }
       } else {
@@ -1455,12 +1442,16 @@ function PohonRenstra() {
 
         if (!ok) {
           const errJson = await response.json().catch(() => ({}));
+          serverMessage = errJson.message || "";
           console.error("Gagal menyimpan perubahan:", errJson.message);
         }
       }
 
       if (!ok) {
-        alert("Gagal menyimpan perubahan ke server. Coba login ulang kalau masalah berlanjut.");
+        alert(
+          serverMessage ||
+            "Gagal menyimpan perubahan ke server. Coba login ulang kalau masalah berlanjut."
+        );
         return;
       }
 
@@ -1513,10 +1504,16 @@ function PohonRenstra() {
             <select
               value={year}
               onChange={(event) => setYear(event.target.value)}
-              className="w-full rounded-md border border-slate-300 bg-white p-2.5 text-sm text-slate-700 outline-none transition focus:border-blue-950 focus:ring-2 focus:ring-blue-950/20"
+              disabled={years.length === 0}
+              className="w-full rounded-md border border-slate-300 bg-white p-2.5 text-sm text-slate-700 outline-none transition focus:border-blue-950 focus:ring-2 focus:ring-blue-950/20 disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-400"
             >
-              {YEAR_OPTIONS.map((yr) => (
-                <option key={yr} value={String(yr)}>
+              {years.length === 0 && (
+                <option value="">
+                  {loadingYears ? "Memuat tahun..." : "Belum ada tahun"}
+                </option>
+              )}
+              {years.map((yr) => (
+                <option key={yr} value={yr}>
                   {yr}
                 </option>
               ))}
@@ -1525,41 +1522,40 @@ function PohonRenstra() {
         </div>
 
         {/* INFO */}
-        {!isLoading && isArchived ? (
+        {!isLoading && isArchived && (
           <div className="mb-5 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3">
             <div className="flex items-start gap-3">
               <span className="material-symbols-outlined text-amber-600">archive</span>
               <div>
-                <p className="text-sm font-semibold text-amber-900">Data Sudah Diarsipkan</p>
+                <p className="text-sm font-semibold text-amber-900">Pohon Kinerja Diarsipkan</p>
                 <p className="mt-1 text-xs leading-relaxed text-amber-700">
-                  Pohon kinerja tahun {year} sudah diarsipkan di halaman Pohon Kinerja,
-                  sehingga tidak lagi ditampilkan di Rencana Strategis. Pilih tahun lain,
-                  atau pulihkan (restore) arsip tahun ini kalau masih perlu diakses.
-                </p>
-              </div>
-            </div>
-          </div>
-        ) : (
-          <div className="mb-5 rounded-lg border border-blue-100 bg-blue-50 px-4 py-3">
-            <div className="flex items-start gap-3">
-              <span className="material-symbols-outlined text-blue-700">info</span>
-              <div>
-                <p className="text-sm font-semibold text-blue-900">Struktur Rencana Strategis</p>
-                <p className="mt-1 text-xs leading-relaxed text-blue-700">
-                  Struktur Ultimate, Intermediate, Immediate, dan Output berasal dari Pohon
-                  Kinerja dan tidak bisa ditambah/dihapus dari sini. Klik <b>Lihat Detail</b>{" "}
-                  lalu <b>Edit</b> untuk mengisi atau melengkapi konten (indikator, target,
-                  sasaran, program, kegiatan, output/input, dan sub kegiatan).
+                  Pohon kinerja tahun {year} sudah diarsipkan di halaman Pohon Kinerja.
+                  Datanya tetap bisa dilihat dan diedit di Rencana Strategis.
                 </p>
               </div>
             </div>
           </div>
         )}
 
+        <div className="mb-5 rounded-lg border border-blue-100 bg-blue-50 px-4 py-3">
+          <div className="flex items-start gap-3">
+            <span className="material-symbols-outlined text-blue-700">info</span>
+            <div>
+              <p className="text-sm font-semibold text-blue-900">Struktur Rencana Strategis</p>
+              <p className="mt-1 text-xs leading-relaxed text-blue-700">
+                Struktur Ultimate, Intermediate, Immediate, dan Output berasal dari Pohon
+                Kinerja dan tidak bisa ditambah/dihapus dari sini. Klik <b>Lihat Detail</b>{" "}
+                lalu <b>Edit</b> untuk mengisi atau melengkapi konten (indikator, target,
+                sasaran, program, kegiatan, output/input, dan sub kegiatan).
+              </p>
+            </div>
+          </div>
+        </div>
+
         {/* TABLE */}
         <RenstraTable
           data={filteredData}
-          archived={isArchived}
+          archived={false}
           loading={isLoading}
           onDetail={openDetail}
         />
